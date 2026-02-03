@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: hekatoncheiros-core-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: hc_user
+      POSTGRES_PASSWORD: hc_password
+      POSTGRES_DB: hc_core
+    volumes:
+      - hc_core_data:/var/lib/postgresql/data
+
+volumes:
+  hc_core_data:

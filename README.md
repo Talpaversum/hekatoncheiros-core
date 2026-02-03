@@ -2,46 +2,46 @@
 
 Platform kernel: auth, tenancy, app registry, licensing, events.
 
-## Rychlý start (MVP)
+## Quick start (MVP)
 
-1) Spusť Postgres:
+1) Start Postgres:
 
 ```bash
 docker compose up -d
 ```
 
-2) Nastav env:
+2) Set env:
 
 ```bash
 cp .env.example .env
 ```
 
-3) Migrace + seed:
+3) Migrations + seed:
 
 ```bash
 npm run db:migrate
 npm run db:seed
 ```
 
-4) Spusť API:
+4) Run the API:
 
 ```bash
 npm run dev
 ```
 
-API běží na `http://localhost:3000/api/v1` a swagger UI na `http://localhost:3000/docs`.
+API runs at `http://localhost:3000/api/v1` and the Swagger UI at `http://localhost:3000/docs`.
 
-## Skripty
+## Scripts
 
 - `npm run dev` – dev server
 - `npm run build` – TS build
-- `npm run start` – start z `dist`
-- `npm run db:migrate` – aplikace migrací
-- `npm run db:seed` – seed základních dat
-- `npm run codegen:openapi` – generování typů z OpenAPI
+- `npm run start` – start from `dist`
+- `npm run db:migrate` – apply migrations
+- `npm run db:seed` – seed base data
+- `npm run codegen:openapi` – generate types from OpenAPI
 
-## Poznámky
+## Notes
 
-- Tenancy resolver je zatím `HeaderTenantResolver` (header `x-tenant-id`).
-- DB-per-tenant je připravené jako rozhraní, ale v MVP používáme shared DB.
-- JWT tokeny jsou ověřované pomocí sdíleného `JWT_SECRET`.
+- The tenancy resolver is currently `HeaderTenantResolver` (header `x-tenant-id`).
+- DB-per-tenant is prepared as an interface, but the MVP uses a shared DB.
+- JWT tokens are verified using the shared `JWT_SECRET`.

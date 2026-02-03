@@ -1,4 +1,10 @@
+import { createHash } from "node:crypto";
+
 import { getPool } from "./pool.js";
+
+function hashPassword(password: string) {
+  return createHash("sha256").update(password).digest("hex");
+}
 
 async function run() {
   const pool = getPool();
@@ -7,8 +13,8 @@ async function run() {
     ["tnt_default", "Default Tenant", "localhost", "active"],
   );
   await pool.query(
-    "insert into core.users (id, email, password_hash, status) values ($1, $2, $3, $4) on conflict do nothing",
-    ["usr_admin", "admin@example.com", "hashed", "active"],
+    "insert into core.users (id, email, password_hash, status) values ($1, $2, $3, $4) on conflict (id) do update set email = excluded.email, password_hash = excluded.password_hash, status = excluded.status",
+    ["usr_admin", "admin@example.com", hashPassword("admin"), "active"],
   );
   await pool.query(
     "insert into core.user_privileges (user_id, tenant_id, privilege) values ($1, $2, $3) on conflict do nothing",

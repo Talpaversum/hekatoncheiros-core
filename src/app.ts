@@ -1,4 +1,5 @@
 import fastify from "fastify";
+import cors from "@fastify/cors";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 
@@ -16,6 +17,12 @@ export async function buildApp() {
   const config = loadConfig();
   const app = fastify({ logger: true });
   app.decorate("config", config);
+
+  await app.register(cors, {
+    origin: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  });
 
   await app.register(swagger, {
     openapi: {

@@ -17,7 +17,14 @@ export async function getAppLicense(tenantId: string, appId: string): Promise<Ap
     [tenantId, appId],
   );
   if (result.rowCount === 0) {
-    throw new NotFoundError("License not found");
+    return {
+      app_id: appId,
+      state: "inactive",
+      plan: null,
+      expires_at: null,
+      features: {},
+      limits: {},
+    };
   }
   const row = result.rows[0];
   const entitlements = (row.entitlements_json ?? {}) as { features?: Record<string, boolean>; limits?: Record<string, unknown> };

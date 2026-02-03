@@ -8,6 +8,18 @@ create table if not exists core.users (
   created_at timestamptz not null default now()
 );
 
+create table if not exists core.refresh_tokens (
+  id uuid primary key default gen_random_uuid(),
+  user_id text not null references core.users(id),
+  token_hash text not null,
+  expires_at timestamptz not null,
+  revoked_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists refresh_tokens_user_id_idx on core.refresh_tokens (user_id);
+create index if not exists refresh_tokens_token_hash_idx on core.refresh_tokens (token_hash);
+
 create table if not exists core.tenants (
   id text primary key,
   name text not null,

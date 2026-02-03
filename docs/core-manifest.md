@@ -1,386 +1,295 @@
-Hekatoncheiros App Manifest Specification
+# Hekatoncheiros App Manifest Specification
+> Draft v0.1
 
-Draft v0.1
-
-1. Purpose
+## Purpose
 
 The App Manifest is the single, authoritative declaration of how an application integrates with the Hekatoncheiros Platform Kernel.
 
 It exists to:
 
-enforce isolation
-
-enable safe multi-tenancy
-
-support licensing and marketplaces
-
-enable automated validation (by core and by agents such as Cline)
-
-prevent implicit or undocumented coupling
+- enforce isolation
+- enable safe multi-tenancy
+- support licensing and marketplaces
+- enable automated validation (by core and by agents such as Cline)
+- prevent implicit or undocumented coupling
 
 An app cannot be installed or enabled without a valid manifest.
 
-2. Manifest Scope and Guarantees
+## Manifest Scope and Guarantees
 
 The manifest declares:
 
-identity and ownership
-
-data ownership
-
-permissions and privileges
-
-licensing model
-
-integration points (API, events, UI)
-
-collaboration constraints
+- identity and ownership
+- data ownership
+- permissions and privileges
+- licensing model
+- integration points (API, events, UI)
+- collaboration constraints
 
 The Platform Kernel guarantees that:
 
-the manifest is validated before app activation
+- the manifest is validated before app activation
+- declared contracts are enforced
+- undeclared behavior is rejected
 
-declared contracts are enforced
-
-undeclared behavior is rejected
-
-3. App Identity
+## App Identity
 
 Each app must declare:
 
-app_id
+- `app_id`
+  - globally unique
+  - immutable
+  - reverse-domain or org-prefixed recommended
+- `app_name`
+  - human-readable
+  - not required to be unique
+- `version`
+  - semantic version
+  - used for compatibility checks
+- `vendor`
+  - legal or organizational identity
+  - used for marketplace attribution
 
-globally unique
-
-immutable
-
-reverse-domain or org-prefixed recommended
-
-app_name
-
-human-readable
-
-not required to be unique
-
-version
-
-semantic version
-
-used for compatibility checks
-
-vendor
-
-legal or organizational identity
-
-used for marketplace attribution
-
-4. Tenancy Awareness
+## Tenancy Awareness
 
 Apps are tenant-agnostic by design.
 
 The manifest must declare:
 
-whether the app is:
+- whether the app is:
+  - tenant-scoped (default)
+  - supports cross-tenant collaboration (explicit opt-in)
 
-tenant-scoped (default)
+### Cross-tenant collaboration rules
 
-supports cross-tenant collaboration (explicit opt-in)
+Cross-tenant collaboration is mediated exclusively by the core.
 
-Cross-tenant collaboration rules
-
-Cross-tenant collaboration is mediated exclusively by the core
-
-Apps never resolve foreign tenant identities directly
+Apps never resolve foreign tenant identities directly.
 
 Sharing scope is defined by:
 
-inviting tenant policy
-
-user privileges
-
-app-declared collaboration surface
+- inviting tenant policy
+- user privileges
+- app-declared collaboration surface
 
 Apps must explicitly declare:
 
-what objects (if any) are shareable
+- what objects (if any) are shareable
+- what operations are allowed in shared context (read, comment, act)
 
-what operations are allowed in shared context (read, comment, act)
-
-5. Data Ownership Declaration
+## Data Ownership Declaration
 
 Each app must declare:
 
-the schemas it owns
-
-that it does not access any other schema
+- the schemas it owns
+- that it does not access any other schema
 
 Rules:
 
-One app → one or more schemas
-
-No cross-app foreign keys
-
-No shared tables
-
-No implicit joins
+- one app → one or more schemas
+- no cross-app foreign keys
+- no shared tables
+- no implicit joins
 
 This declaration allows:
 
-schema provisioning
+- schema provisioning
+- permission enforcement
+- migration isolation
+- AGPL boundary clarity
 
-permission enforcement
-
-migration isolation
-
-AGPL boundary clarity
-
-6. Permissions and Privileges
+## Permissions and Privileges
 
 Apps must declare:
 
-required privileges
-
-optional privileges
-
-privilege scopes (tenant / department / group)
+- required privileges
+- optional privileges
+- privilege scopes (tenant / department / group)
 
 Privileges are:
 
-defined by the core
-
-evaluated by the core
-
-consumed by the app
+- defined by the core
+- evaluated by the core
+- consumed by the app
 
 Apps may never:
 
-define new privilege semantics
+- define new privilege semantics
+- bypass privilege evaluation
+- escalate privileges
 
-bypass privilege evaluation
+## Impersonation and Delegation
 
-escalate privileges
-
-7. Impersonation and Delegation
-Impersonation
+### Impersonation
 
 Declared support must specify:
 
-whether impersonation is allowed
-
-which roles may impersonate
-
-scope of impersonation (tenant / department / group)
+- whether impersonation is allowed
+- which roles may impersonate
+- scope of impersonation (tenant / department / group)
 
 Rules:
 
-Full impersonation is allowed only for admins of the relevant scope
+- full impersonation is allowed only for admins of the relevant scope
+- no cross-tenant impersonation
+- platform superadmin is the only exception
+- all impersonation is auditable and explicit
 
-No cross-tenant impersonation
-
-Platform superadmin is the only exception
-
-All impersonation is auditable and explicit
-
-Delegation
+### Delegation
 
 Apps may opt into delegation support.
 
 Delegation means:
 
-User A authorizes User B to perform specific actions on their behalf
+- User A authorizes User B to perform specific actions on their behalf
 
 Scope is:
 
-action-limited
-
-time-limited
-
-revocable
+- action-limited
+- time-limited
+- revocable
 
 Delegation is:
 
-granted by the user
+- granted by the user
+- evaluated by the core
+- enforced by the app
 
-evaluated by the core
-
-enforced by the app
-
-8. Licensing Declaration
+## Licensing Declaration
 
 Each app must declare its license model, independently of the core.
 
 The manifest must specify:
 
-license types supported:
+- license types supported:
+  - perpetual
+  - time-limited
+  - scale-limited (users, workload, entities)
+- feature flags tied to license state
+- behavior on license expiry
 
-perpetual
+### Offline licensing model (clarified)
 
-time-limited
+- license activation is explicit and manual
+- license is cryptographically validated by the core
+- no online checks are required after activation
+- no early revocation exists
 
-scale-limited (users, workload, entities)
+### On license expiration
 
-feature flags tied to license state
-
-behavior on license expiry
-
-Offline licensing model (clarified)
-
-License activation is explicit and manual
-
-License is cryptographically validated by the core
-
-No online checks are required after activation
-
-No early revocation exists
-
-On license expiration
-
-Features are disabled non-destructively
-
-App enters read-only mode
+- features are disabled non-destructively
+- app enters read-only mode
 
 Existing data remains:
 
-accessible
+- accessible
+- queryable
+- available to other apps via APIs
 
-queryable
-
-available to other apps via APIs
-
-No automatic deletion or mutation is allowed
+No automatic deletion or mutation is allowed.
 
 Core responsibility:
 
-validate license
-
-report license state and limits
+- validate license
+- report license state and limits
 
 App responsibility:
 
-enforce limits
+- enforce limits
+- enforce feature availability
 
-enforce feature availability
-
-9. API Integration
+## API Integration
 
 Apps must declare:
 
-APIs they expose
-
-APIs they consume from the core
+- APIs they expose
+- APIs they consume from the core
 
 Rules:
 
-All core interaction happens via API
+- all core interaction happens via API
+- no direct DB access to core data
+- APIs are versioned
+- backward compatibility rules are enforced by the core
 
-No direct DB access to core data
-
-APIs are versioned
-
-Backward compatibility rules are enforced by the core
-
-10. Event Integration
+## Event Integration
 
 Apps must declare:
 
-events they emit
+- events they emit
+- events they consume
 
-events they consume
+### Delivery semantics (clarified)
 
-Delivery semantics (clarified)
-
-Exactly-once delivery is a design goal
-
-Implementation may internally use retries, deduplication, or persistence
-
-Apps must be idempotent
-
-Apps must tolerate retries
+- exactly-once delivery is a design goal
+- implementation may internally use retries, deduplication, or persistence
+- apps must be idempotent
+- apps must tolerate retries
 
 From the app’s perspective:
 
-an event is processed once
+- an event is processed once
+- duplicates must not cause side effects
 
-duplicates must not cause side effects
-
-11. UI Integration
+## UI Integration
 
 Apps may declare:
 
-navigation entries
-
-UI surfaces
-
-configuration panels
+- navigation entries
+- UI surfaces
+- configuration panels
 
 Rules:
 
-UI is hosted inside the platform shell
+- UI is hosted inside the platform shell
+- no app may override core UI
+- visibility is privilege-based
 
-No app may override core UI
-
-Visibility is privilege-based
-
-12. Prohibited Behavior (Hard Enforcement)
+## Prohibited Behavior (Hard Enforcement)
 
 Apps may never:
 
-manage users, tenants, or privileges
-
-modify another app’s data
-
-access undeclared schemas
-
-bypass licensing information
-
-bypass audit logging
-
-perform cross-tenant actions without explicit core mediation
+- manage users, tenants, or privileges
+- modify another app’s data
+- access undeclared schemas
+- bypass licensing information
+- bypass audit logging
+- perform cross-tenant actions without explicit core mediation
 
 Violations result in:
 
-app disablement
+- app disablement
+- marketplace rejection
+- administrative intervention
 
-marketplace rejection
-
-administrative intervention
-
-13. Validation and Enforcement
+## Validation and Enforcement
 
 Manifests are validated at:
 
-install time
+- install time
+- upgrade time
 
-upgrade time
-
-Incompatible changes require explicit admin approval
+Incompatible changes require explicit admin approval.
 
 Core may refuse to load an app with:
 
-missing declarations
+- missing declarations
+- privilege violations
+- unsafe collaboration scopes
 
-privilege violations
-
-unsafe collaboration scopes
-
-Status
+## Status
 
 This manifest specification is intentionally strict.
 
 It trades:
 
-flexibility → safety
-
-convenience → long-term maintainability
-
-implicit behavior → explicit contracts
+- flexibility → safety
+- convenience → long-term maintainability
+- implicit behavior → explicit contracts
 
 This is aligned with:
 
-AGPL core
-
-marketplace goals
-
-multi-tenant self-hosting
-
-agent-assisted development
+- AGPL core
+- marketplace goals
+- multi-tenant self-hosting
+- agent-assisted development

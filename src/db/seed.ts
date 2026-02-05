@@ -40,6 +40,10 @@ async function run() {
     "insert into core.user_privileges (user_id, tenant_id, privilege) values ($1, $2, $3) on conflict do nothing",
     ["usr_admin", "tnt_default", "core.audit.append"],
   );
+  await pool.query(
+    "insert into core.user_privileges (user_id, tenant_id, privilege) values ($1, $2, $3) on conflict do nothing",
+    ["usr_admin", "tnt_default", "platform.apps.manage"],
+  );
   await pool.end();
 }
 

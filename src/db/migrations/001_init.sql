@@ -28,6 +28,7 @@ create table if not exists core.tenants (
   created_at timestamptz not null default now()
 );
 
+
 create table if not exists core.user_privileges (
   user_id text not null,
   tenant_id text not null,
@@ -98,4 +99,11 @@ create table if not exists core.audit_log (
   object_ref text not null,
   metadata jsonb not null,
   created_at timestamptz not null default now()
+);
+
+create table if not exists core.app_migrations (
+  app_id text not null,
+  version text not null,
+  applied_at timestamptz not null default now(),
+  primary key (app_id, version)
 );

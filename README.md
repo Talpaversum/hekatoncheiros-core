@@ -1,5 +1,11 @@
 # hekatoncheiros-core
 
+> ⚠️ **Project status: Early development**
+>
+> This project is part of the Hekatoncheiros platform and is under active development.
+> APIs, features, and internal architecture are not yet stable and may change.
+> This repository is not production-ready.
+
 Platform kernel: auth, tenancy, app registry, licensing, events.
 
 ## Quick start (MVP)

@@ -190,9 +190,18 @@
         },
         "ui": {
           "type": "object",
-          "required": ["nav_entries"],
+          "required": ["nav_entries", "artifact"],
           "additionalProperties": false,
           "properties": {
+            "artifact": {
+              "type": "object",
+              "required": ["url", "auth"],
+              "additionalProperties": false,
+              "properties": {
+                "url": { "type": "string", "minLength": 1 },
+                "auth": { "const": "core-signed-token" }
+              }
+            },
             "nav_entries": {
               "type": "array",
               "items": {

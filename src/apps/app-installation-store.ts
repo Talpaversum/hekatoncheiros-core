@@ -3,10 +3,15 @@ export type InstalledApp = {
   slug: string;
   base_url: string;
   ui_url: string;
+  ui_integrity: string;
   required_privileges: string[];
   manifest: {
     integration?: {
       ui?: {
+        artifact?: {
+          url?: string;
+          auth?: string;
+        };
         nav_entries?: Array<{ label: string; path: string; required_privileges?: string[] }>;
       };
     };

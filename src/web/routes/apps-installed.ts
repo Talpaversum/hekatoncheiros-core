@@ -2,16 +2,18 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
+import { issueInstallerToken } from "../../apps/installer-token.js";
 import { validateManifest } from "../../apps/manifest-validator.js";
+import { saveUiPluginArtifact } from "../../apps/ui-artifact-storage.js";
 import { ForbiddenError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 
 const installSchema = z.object({
   app_id: z.string().min(1),
   base_url: z.string().url(),
-  ui_url: z.string().url(),
+  ui_url: z.string().url().optional(),
   required_privileges: z.array(z.string()).default([]),
-  manifest: z.record(z.unknown()),
+  manifest: z.record(z.string(), z.unknown()),
 });
 
 export async function registerInstalledAppRoutes(app: FastifyInstance) {
@@ -44,18 +46,61 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     const integration = parsed.manifest["integration"] as {
       slug?: string;
       api?: { exposes?: { base_path?: string } };
-      ui?: { nav_entries?: Array<{ label: string; path: string; required_privileges?: string[] }> };
+      ui?: {
+        artifact?: { url?: string; auth?: string };
+        nav_entries?: Array<{ label: string; path: string; required_privileges?: string[] }>;
+      };
     };
     const slug = integration?.slug;
     const basePath = integration?.api?.exposes?.base_path;
-    if (!slug || !basePath) {
-      return reply.code(400).send({ message: "manifest integration.slug and integration.api.exposes.base_path are required" });
+    const artifactPath = integration?.ui?.artifact?.url;
+    const artifactAuth = integration?.ui?.artifact?.auth;
+    if (!slug || !basePath || !artifactPath || !artifactAuth) {
+      return reply.code(400).send({ message: "manifest integration.slug, integration.api.exposes.base_path, integration.ui.artifact.url and integration.ui.artifact.auth are required" });
+    }
+
+    if (artifactAuth !== "core-signed-token") {
+      return reply.code(400).send({ message: "integration.ui.artifact.auth must be core-signed-token" });
     }
 
     const normalizedBasePath = `/apps/${slug}`;
     if (basePath !== normalizedBasePath) {
       return reply.code(400).send({ message: "integration.api.exposes.base_path must match slug" });
     }
+
+    const artifactUrl = new URL(artifactPath, parsed.base_url);
+    const unauthenticatedResponse = await fetch(artifactUrl);
+    if (unauthenticatedResponse.status !== 401 && unauthenticatedResponse.status !== 403) {
+      return reply.code(400).send({
+        message: `artifact endpoint misconfigured: unauthenticated fetch must return 401/403, got ${unauthenticatedResponse.status}`,
+      });
+    }
+
+    const installerToken = await issueInstallerToken({ appId: parsed.app_id, slug, config });
+    const authenticatedResponse = await fetch(artifactUrl, {
+      headers: {
+        authorization: `Bearer ${installerToken}`,
+      },
+    });
+
+    if (authenticatedResponse.status !== 200) {
+      return reply.code(400).send({
+        message: `artifact download failed with installer token: expected 200, got ${authenticatedResponse.status}`,
+      });
+    }
+
+    const artifactContent = Buffer.from(await authenticatedResponse.arrayBuffer());
+    if (artifactContent.length === 0) {
+      return reply.code(400).send({ message: "artifact download failed: empty response body" });
+    }
+
+    const storedArtifact = await saveUiPluginArtifact({
+      config,
+      slug,
+      content: artifactContent,
+    });
+
+    const coreHostedUiUrl = `/api/v1/apps/${slug}/ui/plugin.js`;
 
     const store = getAppInstallationStore();
     const existing = await store.listInstalledApps();
@@ -81,7 +126,8 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
       app_id: parsed.app_id,
       slug,
       base_url: parsed.base_url,
-      ui_url: parsed.ui_url,
+      ui_url: coreHostedUiUrl,
+      ui_integrity: storedArtifact.sha256,
       required_privileges: parsed.required_privileges ?? [],
       manifest: {
         ...parsed.manifest,

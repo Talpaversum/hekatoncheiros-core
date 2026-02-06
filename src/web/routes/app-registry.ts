@@ -19,8 +19,9 @@ export async function registerAppRegistryRoutes(app: FastifyInstance) {
         );
         return {
           app_id: app.app_id,
+          slug: app.slug,
           ui_url: app.ui_url,
-          nav_entries: filtered.map((entry) => ({ label: entry.label, path: entry.path })),
+          nav_entries: filtered,
         };
       });
 

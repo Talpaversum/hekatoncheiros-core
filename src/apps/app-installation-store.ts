@@ -1,5 +1,6 @@
 export type InstalledApp = {
   app_id: string;
+  slug: string;
   base_url: string;
   ui_url: string;
   required_privileges: string[];

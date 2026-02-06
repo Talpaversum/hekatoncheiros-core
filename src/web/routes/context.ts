@@ -18,7 +18,7 @@ export async function registerContextRoutes(app: FastifyInstance) {
     const licenses: Record<string, unknown> = {};
     if (privileges.includes("core.licensing.read")) {
       try {
-        const license = await getAppLicense(tenantId, "app_inventory");
+        const license = await getAppLicense(tenantId, "com.talpaversum.inventory");
         licenses[license.app_id] = license;
       } catch {
         // ignore for MVP

@@ -1,5 +1,7 @@
 import { getPool } from "../db/pool.js";
 
+import { deriveAppSchemaName } from "./app-schema.js";
+
 import type { AppManifest } from "./manifest-validator.js";
 
 export interface AppRegisterResponse {
@@ -35,6 +37,8 @@ export async function enableAppForTenant(params: {
   config: Record<string, unknown> | null;
 }) {
   const pool = getPool();
+  const schemaName = deriveAppSchemaName(params.appId);
+  await pool.query(`create schema if not exists ${schemaName}`);
   await pool.query(
     "insert into core.tenant_apps (tenant_id, app_id, enabled, version_pinned, config) values ($1, $2, true, $3, $4) on conflict (tenant_id, app_id) do update set enabled = true, version_pinned = excluded.version_pinned, config = excluded.config",
     [params.tenantId, params.appId, params.version, params.config ?? {}],

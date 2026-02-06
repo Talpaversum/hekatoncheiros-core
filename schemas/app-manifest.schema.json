@@ -157,9 +157,10 @@
     },
     "integration": {
       "type": "object",
-      "required": ["api", "events", "ui"],
+      "required": ["slug", "api", "events", "ui"],
       "additionalProperties": false,
       "properties": {
+        "slug": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$" },
         "api": {
           "type": "object",
           "required": ["exposes", "consumes_core_api"],

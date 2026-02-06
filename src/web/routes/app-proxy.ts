@@ -5,13 +5,13 @@ import { ForbiddenError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 
 export async function registerAppProxyRoutes(app: FastifyInstance) {
-  app.all("/apps/:app_id/*", async (request, reply) => {
+  app.all("/apps/:slug/*", async (request, reply) => {
     const config = app.config;
     await requireUserAuth(request, config);
 
-    const appId = request.params.app_id as string;
+    const slug = (request.params as { slug: string }).slug;
     const store = getAppInstallationStore();
-    const appInfo = await store.getApp(appId);
+    const appInfo = (await store.listInstalledApps()).find((item) => item.slug === slug) ?? null;
     if (!appInfo) {
       return reply.code(404).send({ message: "Unknown app" });
     }
@@ -20,7 +20,7 @@ export async function registerAppProxyRoutes(app: FastifyInstance) {
       throw new ForbiddenError();
     }
 
-    const basePath = `/api/v1/apps/${appId}`;
+    const basePath = `/api/v1/apps/${slug}`;
     const forwardPath = request.url.replace(basePath, "");
     const url = new URL(appInfo.base_url.replace(/\/$/, "") + forwardPath);
 

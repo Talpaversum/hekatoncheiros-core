@@ -32,26 +32,6 @@ export interface AppInstallationStore {
   uninstallApp(appId: string): Promise<void>;
 }
 
-export class InMemoryAppInstallationStore implements AppInstallationStore {
-  private apps: InstalledApp[] = [];
-
-  async listInstalledApps(): Promise<InstalledApp[]> {
-    return this.apps;
-  }
-
-  async getApp(appId: string): Promise<InstalledApp | null> {
-    return this.apps.find((app) => app.app_id === appId) ?? null;
-  }
-
-  async installApp(app: InstalledApp): Promise<void> {
-    this.apps = this.apps.filter((item) => item.app_id !== app.app_id).concat(app);
-  }
-
-  async uninstallApp(appId: string): Promise<void> {
-    this.apps = this.apps.filter((app) => app.app_id !== appId);
-  }
-}
-
 function readStringField(source: unknown, key: string): string | undefined {
   if (!source || typeof source !== "object") {
     return undefined;

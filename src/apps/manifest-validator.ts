@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import Ajv from "ajv";
+import Ajv2020 from "ajv/dist/2020";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -10,7 +10,7 @@ const __dirname = path.dirname(__filename);
 
 export type AppManifest = Record<string, unknown>;
 
-const ajv = new Ajv({ allErrors: true, strict: false });
+const ajv = new Ajv2020({ allErrors: true, strict: false });
 const SCHEMA_RELATIVE_PATH = path.join("schemas", "app-manifest.schema.json");
 
 let validator: ((data: unknown) => boolean) | null = null;

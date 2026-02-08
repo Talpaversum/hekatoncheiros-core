@@ -126,6 +126,8 @@ export class DbAppInstallationStore implements AppInstallationStore {
     const pool = getPool();
     const appName = readStringField(app.manifest, "app_name") ?? null;
     const navEntries = readNavEntries(app.manifest);
+    const navEntriesJson = JSON.stringify(navEntries ?? []);
+    const manifestJson = JSON.stringify(app.manifest ?? {});
 
     await pool.query(
       `insert into core.installed_apps (
@@ -142,7 +144,7 @@ export class DbAppInstallationStore implements AppInstallationStore {
          installed_at,
          updated_at
        )
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, now(), now())
+       values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, true, now(), now())
        on conflict (app_id)
        do update set
          slug = excluded.slug,
@@ -163,8 +165,8 @@ export class DbAppInstallationStore implements AppInstallationStore {
         app.ui_url,
         app.ui_integrity,
         app.required_privileges,
-        navEntries,
-        app.manifest,
+        navEntriesJson,
+        manifestJson,
       ],
     );
   }

@@ -5,6 +5,7 @@ import { getAppInstallationStore } from "../../apps/app-installation-service.js"
 import { issueInstallerToken } from "../../apps/installer-token.js";
 import { validateManifest } from "../../apps/manifest-validator.js";
 import { saveUiPluginArtifact } from "../../apps/ui-artifact-storage.js";
+import { listActiveLicensedAppIdsForTenant } from "../../licensing/license-service.js";
 import { ForbiddenError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 
@@ -25,7 +26,14 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     }
     const store = getAppInstallationStore();
     const apps = await store.listInstalledApps();
-    return reply.send({ items: apps });
+    const tenantId = request.requestContext.tenant.tenantId;
+    const licensedAppIds = new Set(await listActiveLicensedAppIdsForTenant(tenantId));
+    return reply.send({
+      items: apps.map((installedApp) => ({
+        ...installedApp,
+        licensed: licensedAppIds.has(installedApp.app_id),
+      })),
+    });
   });
 
   app.post("/apps/installed", async (request, reply) => {

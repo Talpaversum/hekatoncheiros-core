@@ -1,5 +1,4 @@
 import { getPool } from "../db/pool.js";
-import { NotFoundError } from "../shared/errors.js";
 
 export interface AppLicenseRecord {
   app_id: string;
@@ -8,6 +7,16 @@ export interface AppLicenseRecord {
   expires_at: string | null;
   features: Record<string, boolean>;
   limits: Record<string, unknown>;
+}
+
+export async function listActiveLicensedAppIdsForTenant(tenantId: string): Promise<string[]> {
+  const pool = getPool();
+  const result = await pool.query(
+    "select app_id from core.licenses where tenant_id = $1 and status = $2",
+    [tenantId, "active"],
+  );
+
+  return result.rows.map((row) => row.app_id as string);
 }
 
 export async function getAppLicense(tenantId: string, appId: string): Promise<AppLicenseRecord> {

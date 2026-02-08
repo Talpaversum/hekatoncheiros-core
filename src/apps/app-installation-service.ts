@@ -1,6 +1,6 @@
-import { InMemoryAppInstallationStore } from "./app-installation-store.js";
+import { DbAppInstallationStore } from "./app-installation-store.js";
 
-const store = new InMemoryAppInstallationStore();
+const store = new DbAppInstallationStore();
 
 export function getAppInstallationStore() {
   return store;

@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
 
 import { loadPrivilegesForUser } from "../../access/privilege-evaluator.js";
-import { getAppLicense } from "../../licensing/license-service.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 
 export async function registerContextRoutes(app: FastifyInstance) {
@@ -15,16 +14,6 @@ export async function registerContextRoutes(app: FastifyInstance) {
     const privileges = await loadPrivilegesForUser(actor.userId, tenantId);
     request.requestContext.privileges = privileges;
 
-    const licenses: Record<string, unknown> = {};
-    if (privileges.includes("core.licensing.read")) {
-      try {
-        const license = await getAppLicense(tenantId, "com.talpaversum.inventory");
-        licenses[license.app_id] = license;
-      } catch {
-        // ignore for MVP
-      }
-    }
-
     return reply.send({
       tenant: {
         id: tenantId,
@@ -37,7 +26,7 @@ export async function registerContextRoutes(app: FastifyInstance) {
         delegation: actor.delegation,
       },
       privileges,
-      licenses,
+      licenses: {},
     });
   });
 }

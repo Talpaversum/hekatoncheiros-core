@@ -5,7 +5,7 @@ import { getAppInstallationStore } from "../../apps/app-installation-service.js"
 import { issueInstallerToken } from "../../apps/installer-token.js";
 import { validateManifest } from "../../apps/manifest-validator.js";
 import { saveUiPluginArtifact } from "../../apps/ui-artifact-storage.js";
-import { listActiveLicensedAppIdsForTenant } from "../../licensing/license-service.js";
+import { hasAnyEntitlement, resolveEntitlement } from "../../licensing/entitlement-service.js";
 import { ForbiddenError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 
@@ -27,12 +27,24 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     const store = getAppInstallationStore();
     const apps = await store.listInstalledApps();
     const tenantId = request.requestContext.tenant.tenantId;
-    const licensedAppIds = new Set(await listActiveLicensedAppIdsForTenant(tenantId));
+
+    const items = await Promise.all(
+      apps.map(async (installedApp) => {
+        const [resolvedEntitlement, anyEntitlement] = await Promise.all([
+          resolveEntitlement(tenantId, installedApp.app_id, new Date()),
+          hasAnyEntitlement(tenantId, installedApp.app_id),
+        ]);
+
+        return {
+          ...installedApp,
+          resolved_entitlement: resolvedEntitlement,
+          has_any_entitlement: anyEntitlement,
+        };
+      }),
+    );
+
     return reply.send({
-      items: apps.map((installedApp) => ({
-        ...installedApp,
-        licensed: licensedAppIds.has(installedApp.app_id),
-      })),
+      items,
     });
   });
 

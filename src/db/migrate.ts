@@ -8,7 +8,8 @@ import { getPool } from "./pool.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function run() {
+export async function migrateDatabase(options?: { closePool?: boolean }) {
+  const closePool = options?.closePool ?? true;
   const pool = getPool();
   const client = await pool.connect();
 
@@ -56,10 +57,16 @@ async function run() {
     client.release();
   }
 
-  await pool.end();
+  if (closePool) {
+    await pool.end();
+  }
 }
 
-run().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+const isEntrypoint = process.argv[1] && path.resolve(process.argv[1]) === __filename;
+
+if (isEntrypoint) {
+  migrateDatabase().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

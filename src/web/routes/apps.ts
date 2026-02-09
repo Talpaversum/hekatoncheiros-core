@@ -29,7 +29,7 @@ export async function registerAppRoutes(app: FastifyInstance) {
     }
 
     const tenantId = request.requestContext.tenant.tenantId;
-    const appId = request.params.app_id as string;
+    const appId = (request.params as { app_id: string }).app_id;
     const body = request.body as { version: string; config?: Record<string, unknown> };
     const result = await enableAppForTenant({
       tenantId,
@@ -48,7 +48,7 @@ export async function registerAppRoutes(app: FastifyInstance) {
       throw new ForbiddenError();
     }
     const tenantId = request.requestContext.tenant.tenantId;
-    const appId = request.params.app_id as string;
+    const appId = (request.params as { app_id: string }).app_id;
     await disableAppForTenant(tenantId, appId);
     return reply.code(204).send();
   });

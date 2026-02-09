@@ -26,7 +26,7 @@ const headerResolver = new HeaderTenantResolver();
 
 export async function resolveTenant(request: FastifyRequest): Promise<TenantContext> {
   const config = loadConfig();
-  const resolved = (await headerResolver.resolve(request, config)) ?? config.DEFAULT_TENANT_ID;
+  const resolved = (await headerResolver.resolve(request)) ?? config.DEFAULT_TENANT_ID;
 
   return {
     tenantId: resolved,

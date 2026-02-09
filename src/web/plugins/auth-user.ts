@@ -60,7 +60,12 @@ export async function requireUserAuth(request: FastifyRequest, config: EnvConfig
   }
 
   const token = header.slice("Bearer ".length);
-  const claims = await verifyUserJwt(token, config);
+  let claims: UserClaims;
+  try {
+    claims = await verifyUserJwt(token, config);
+  } catch {
+    throw new UnauthorizedError();
+  }
   registerUserAuth(request, claims);
   request.requestContext.actor = buildUserContext(request) ?? request.requestContext.actor;
   if (claims.tenant_id) {

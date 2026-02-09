@@ -14,6 +14,9 @@ const envSchema = z.object({
   INSTALLER_TOKEN_SECRET: z.string().min(16),
   INSTALLER_TOKEN_ISSUER: z.string().default("hekatoncheiros-core-installer"),
   DEFAULT_TENANT_ID: z.string().default("tnt_default"),
+  LICENSING_CLOCK_SKEW_SECONDS: z.coerce.number().int().nonnegative().default(600),
+  LICENSING_CLOCK_SOFT_GRACE_SECONDS: z.coerce.number().int().nonnegative().default(43200),
+  OFFLINE_LICENSE_PUBLIC_KEYS_JSON: z.string().default("{}"),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

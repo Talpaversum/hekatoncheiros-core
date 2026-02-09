@@ -34,7 +34,11 @@ async function run() {
   );
   await pool.query(
     "insert into core.user_privileges (user_id, tenant_id, privilege) values ($1, $2, $3) on conflict do nothing",
-    ["usr_admin", "tnt_default", "core.licensing.activate_offline"],
+    ["usr_admin", "tnt_default", "core.licensing.ingest_offline"],
+  );
+  await pool.query(
+    "insert into core.user_privileges (user_id, tenant_id, privilege) values ($1, $2, $3) on conflict do nothing",
+    ["usr_admin", "tnt_default", "core.licensing.manage_selection"],
   );
   await pool.query(
     "insert into core.user_privileges (user_id, tenant_id, privilege) values ($1, $2, $3) on conflict do nothing",

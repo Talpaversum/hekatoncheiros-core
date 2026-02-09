@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
-import { listActiveLicensedAppIdsForTenant } from "../../licensing/license-service.js";
+import { resolveEntitlement } from "../../licensing/entitlement-service.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 
 function readStringField(source: unknown, key: string): string | undefined {
@@ -26,11 +26,20 @@ export async function registerAppRegistryRoutes(app: FastifyInstance) {
     const tenantId = request.requestContext.tenant.tenantId;
     const store = getAppInstallationStore();
     const apps = await store.listInstalledApps();
-    const licensedAppIds = new Set(await listActiveLicensedAppIdsForTenant(tenantId));
+
+    const entitledAppIds = new Set<string>();
+    await Promise.all(
+      apps.map(async (installedApp) => {
+        const resolved = await resolveEntitlement(tenantId, installedApp.app_id, new Date());
+        if (resolved) {
+          entitledAppIds.add(installedApp.app_id);
+        }
+      }),
+    );
 
     const items = apps
       .filter((app) => app.enabled !== false)
-      .filter((app) => licensedAppIds.has(app.app_id))
+      .filter((app) => entitledAppIds.has(app.app_id))
       .filter((app) => app.required_privileges.every((priv) => request.requestContext.privileges.includes(priv)))
       .map((app) => {
         const navEntries = app.nav_entries ?? app.manifest.integration?.ui?.nav_entries ?? [];

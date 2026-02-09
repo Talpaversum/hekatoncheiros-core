@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 
+import { hasAllPrivileges } from "../../access/privileges.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { ForbiddenError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
@@ -16,7 +17,7 @@ export async function registerAppProxyRoutes(app: FastifyInstance) {
       return reply.code(404).send({ message: "Unknown app" });
     }
 
-    if (!appInfo.required_privileges.every((priv) => request.requestContext.privileges.includes(priv))) {
+    if (!hasAllPrivileges(request.requestContext.privileges, appInfo.required_privileges)) {
       throw new ForbiddenError();
     }
 

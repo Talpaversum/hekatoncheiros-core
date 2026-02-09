@@ -8,7 +8,7 @@ export async function registerContextRoutes(app: FastifyInstance) {
     const config = app.config;
     await requireUserAuth(request, config);
 
-    const tenantId = request.requestContext.tenant.tenantId;
+    const tenantId = request.requestContext.tenant?.tenantId ?? null;
     const actor = request.requestContext.actor;
 
     const privileges = await loadPrivilegesForUser(actor.userId, tenantId);

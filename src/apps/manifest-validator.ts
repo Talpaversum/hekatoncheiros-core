@@ -36,7 +36,7 @@ function validateReservedRequiredPrivileges(node: unknown): void {
   }
 
   const record = node as Record<string, unknown>;
-  const requiredPrivileges = record.required_privileges;
+  const requiredPrivileges = record["required_privileges"];
   if (Array.isArray(requiredPrivileges)) {
     for (const privilege of requiredPrivileges) {
       if (typeof privilege === "string" && isReservedPrivilegeNamespace(privilege)) {

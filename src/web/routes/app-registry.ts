@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 
+import { hasAllPrivileges } from "../../access/privileges.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { resolveEntitlement } from "../../licensing/entitlement-service.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
@@ -40,11 +41,11 @@ export async function registerAppRegistryRoutes(app: FastifyInstance) {
     const items = apps
       .filter((app) => app.enabled !== false)
       .filter((app) => entitledAppIds.has(app.app_id))
-      .filter((app) => app.required_privileges.every((priv) => request.requestContext.privileges.includes(priv)))
+      .filter((app) => hasAllPrivileges(request.requestContext.privileges, app.required_privileges))
       .map((app) => {
         const navEntries = app.nav_entries ?? app.manifest.integration?.ui?.nav_entries ?? [];
         const filtered = navEntries.filter((entry) =>
-          (entry.required_privileges ?? []).every((priv) => request.requestContext.privileges.includes(priv)),
+          hasAllPrivileges(request.requestContext.privileges, entry.required_privileges ?? []),
         );
         return {
           app_id: app.app_id,

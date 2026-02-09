@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
+import { hasPrivilege } from "../../access/privileges.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { issueInstallerToken } from "../../apps/installer-token.js";
 import { validateManifest } from "../../apps/manifest-validator.js";
@@ -21,7 +22,7 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
   app.get("/apps/installed", async (request, reply) => {
     const config = app.config;
     await requireUserAuth(request, config);
-    if (!request.requestContext.privileges.includes("platform.apps.manage")) {
+    if (!hasPrivilege(request.requestContext.privileges, "platform.apps.manage")) {
       throw new ForbiddenError();
     }
     const store = getAppInstallationStore();
@@ -51,7 +52,7 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
   app.post("/apps/installed", async (request, reply) => {
     const config = app.config;
     await requireUserAuth(request, config);
-    if (!request.requestContext.privileges.includes("platform.apps.manage")) {
+    if (!hasPrivilege(request.requestContext.privileges, "platform.apps.manage")) {
       throw new ForbiddenError();
     }
 
@@ -167,7 +168,7 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
   app.delete("/apps/installed/:app_id", async (request, reply) => {
     const config = app.config;
     await requireUserAuth(request, config);
-    if (!request.requestContext.privileges.includes("platform.apps.manage")) {
+    if (!hasPrivilege(request.requestContext.privileges, "platform.apps.manage")) {
       throw new ForbiddenError();
     }
 

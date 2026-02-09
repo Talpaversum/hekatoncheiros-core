@@ -71,8 +71,9 @@ export async function requireUserAuth(request: FastifyRequest, config: EnvConfig
   if (claims.tenant_id) {
     request.requestContext.tenant.tenantId = claims.tenant_id;
   }
+  const tenantId = request.requestContext.tenant?.tenantId ?? null;
   request.requestContext.privileges = await loadPrivilegesForUser(
     request.requestContext.actor.userId,
-    request.requestContext.tenant.tenantId,
+    tenantId,
   );
 }

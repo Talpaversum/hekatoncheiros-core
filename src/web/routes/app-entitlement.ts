@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 
+import { hasAllPrivileges } from "../../access/privileges.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { resolveEntitlement } from "../../licensing/entitlement-service.js";
 import { ForbiddenError, NotFoundError } from "../../shared/errors.js";
@@ -17,7 +18,7 @@ export async function registerAppEntitlementRoutes(app: FastifyInstance) {
       throw new NotFoundError("Unknown app");
     }
 
-    if (!appInfo.required_privileges.every((priv) => request.requestContext.privileges.includes(priv))) {
+    if (!hasAllPrivileges(request.requestContext.privileges, appInfo.required_privileges)) {
       throw new ForbiddenError();
     }
 

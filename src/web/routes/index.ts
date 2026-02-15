@@ -12,12 +12,14 @@ import { registerContextRoutes } from "./context.js";
 import { registerEventRoutes } from "./events.js";
 import { registerHealthRoutes } from "./health.js";
 import { registerLicensingRoutes } from "./licensing.js";
+import { registerPlatformTrustedOriginsRoutes } from "./platform-trusted-origins.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   await registerHealthRoutes(app);
   await registerAuthRoutes(app);
   await registerContextRoutes(app);
   await registerLicensingRoutes(app);
+  await registerPlatformTrustedOriginsRoutes(app);
   await registerAppRoutes(app);
   await registerInstalledAppRoutes(app);
   await registerAppRegistryRoutes(app);

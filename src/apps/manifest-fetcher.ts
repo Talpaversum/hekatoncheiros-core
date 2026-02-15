@@ -13,6 +13,12 @@ const MANIFEST_PATHS = ["/.well-known/hc-app-manifest.json", "/manifest.json"] a
 type FetchManifestOptions = {
   timeoutMs?: number;
   maxBytes?: number;
+  isTrustedOrigin?: (origin: string) => boolean | Promise<boolean>;
+};
+
+type FetchExecutionOptions = {
+  timeoutMs: number;
+  maxBytes: number;
 };
 
 export type FetchManifestResult = {
@@ -32,11 +38,11 @@ function normalizeBaseUrl(baseUrl: string): URL {
   }
 
   const parsed = new URL(trimmed);
-  if (parsed.protocol !== "https:") {
-    throw new Error("base_url must use https");
-  }
   if (parsed.username || parsed.password) {
     throw new Error("base_url must not include username/password");
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error("base_url must use http or https");
   }
 
   return new URL(parsed.origin);
@@ -181,7 +187,7 @@ async function readBodyWithLimit(response: Response, maxBytes: number): Promise<
   return new TextDecoder().decode(merged);
 }
 
-async function fetchManifestAtUrl(url: URL, options: Required<FetchManifestOptions>): Promise<AppManifest | null> {
+async function fetchManifestAtUrl(url: URL, options: FetchExecutionOptions): Promise<AppManifest | null> {
   let response: Response;
   try {
     response = await fetch(url, {
@@ -225,10 +231,17 @@ async function fetchManifestAtUrl(url: URL, options: Required<FetchManifestOptio
 
 export async function fetchManifest(baseUrl: string, options?: FetchManifestOptions): Promise<FetchManifestResult> {
   const normalized = normalizeBaseUrl(baseUrl);
-  await assertPublicOrigin(normalized);
+  const trusted = (await options?.isTrustedOrigin?.(normalized.origin)) ?? false;
+  if (normalized.protocol !== "https:" && !trusted) {
+    throw new Error("base_url must use https");
+  }
+
+  if (!trusted) {
+    await assertPublicOrigin(normalized);
+  }
 
   const normalizedBaseUrl = normalized.origin;
-  const resolvedOptions: Required<FetchManifestOptions> = {
+  const resolvedOptions: FetchExecutionOptions = {
     timeoutMs: options?.timeoutMs ?? FETCH_TIMEOUT_MS,
     maxBytes: options?.maxBytes ?? MAX_MANIFEST_BYTES,
   };

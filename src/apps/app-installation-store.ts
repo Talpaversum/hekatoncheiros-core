@@ -32,7 +32,7 @@ export interface AppInstallationStore {
   listInstalledApps(): Promise<InstalledApp[]>;
   getApp(appId: string): Promise<InstalledApp | null>;
   installApp(app: InstalledApp): Promise<void>;
-  uninstallApp(appId: string): Promise<void>;
+  uninstallApp(appId: string): Promise<boolean>;
 }
 
 function readStringField(source: unknown, key: string): string | undefined {
@@ -189,8 +189,9 @@ export class DbAppInstallationStore implements AppInstallationStore {
     );
   }
 
-  async uninstallApp(appId: string): Promise<void> {
+  async uninstallApp(appId: string): Promise<boolean> {
     const pool = getPool();
-    await pool.query("delete from core.installed_apps where app_id = $1", [appId]);
+    const result = await pool.query("delete from core.installed_apps where app_id = $1", [appId]);
+    return (result.rowCount ?? 0) > 0;
   }
 }

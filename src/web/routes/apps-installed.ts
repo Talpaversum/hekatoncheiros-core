@@ -7,8 +7,10 @@ import { fetchManifest } from "../../apps/manifest-fetcher.js";
 import { issueInstallerToken } from "../../apps/installer-token.js";
 import { saveUiPluginArtifact } from "../../apps/ui-artifact-storage.js";
 import { recordAudit } from "../../audit/audit-service.js";
+import { getPool } from "../../db/pool.js";
 import { hasAnyEntitlement, resolveEntitlement } from "../../licensing/entitlement-service.js";
-import { ForbiddenError } from "../../shared/errors.js";
+import { getTrustedOriginsStore } from "../../platform/trusted-origins-store.js";
+import { ForbiddenError, NotFoundError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 
 const fetchManifestSchema = z.object({
@@ -21,6 +23,11 @@ const installSchema = z.object({
 });
 
 export async function registerInstalledAppRoutes(app: FastifyInstance) {
+  const isTrustedOrigin = async (origin: string) => {
+    const enabledOrigins = await getTrustedOriginsStore().listEnabledOrigins();
+    return enabledOrigins.has(origin);
+  };
+
   app.get("/apps/installed", async (request, reply) => {
     const config = app.config;
     await requireUserAuth(request, config);
@@ -61,7 +68,7 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     const parsed = installSchema.parse(request.body);
     let fetched: Awaited<ReturnType<typeof fetchManifest>>;
     try {
-      fetched = await fetchManifest(parsed.base_url);
+      fetched = await fetchManifest(parsed.base_url, { isTrustedOrigin });
     } catch (error) {
       return reply.code(400).send({ message: (error as Error).message });
     }
@@ -209,7 +216,7 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     const parsed = fetchManifestSchema.parse(request.body);
     let fetched: Awaited<ReturnType<typeof fetchManifest>>;
     try {
-      fetched = await fetchManifest(parsed.base_url);
+      fetched = await fetchManifest(parsed.base_url, { isTrustedOrigin });
     } catch (error) {
       return reply.code(400).send({ message: (error as Error).message });
     }
@@ -240,7 +247,38 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
 
     const appId = (request.params as { app_id: string }).app_id;
     const store = getAppInstallationStore();
-    await store.uninstallApp(appId);
+    const deleted = await store.uninstallApp(appId);
+    const deletedCount = deleted ? 1 : 0;
+
+    if (config.NODE_ENV !== "production") {
+      try {
+        const pool = getPool();
+        const dbMeta = await pool.query(
+          "select current_database() as current_database, inet_server_addr()::text as inet_server_addr",
+        );
+        const row = dbMeta.rows[0] as
+          | { current_database?: string; inet_server_addr?: string | null }
+          | undefined;
+
+        app.log.info({
+          action: "apps.uninstall.debug",
+          app_id: appId,
+          rowCount: deletedCount,
+          current_database: row?.current_database ?? null,
+          inet_server_addr: row?.inet_server_addr ?? null,
+        });
+      } catch (error) {
+        app.log.warn({
+          action: "apps.uninstall.debug.failed",
+          app_id: appId,
+          error: (error as Error).message,
+        });
+      }
+    }
+
+    if (!deleted) {
+      throw new NotFoundError("App not installed");
+    }
 
     await recordAudit({
       tenantId: request.requestContext.tenant.tenantId,

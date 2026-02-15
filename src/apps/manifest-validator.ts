@@ -15,6 +15,7 @@ const require = createRequire(import.meta.url);
 const Ajv2020 = require("ajv/dist/2020");
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 const SCHEMA_RELATIVE_PATH = path.join("schemas", "app-manifest.schema.json");
+export const MANIFEST_SCHEMA_ID = "https://hekatoncheiros.local/schemas/app-manifest.schema.json";
 
 let validator: ValidateFunction | null = null;
 const RESERVED_PRIVILEGE_PREFIXES = ["core.", "platform.", "tenant."];

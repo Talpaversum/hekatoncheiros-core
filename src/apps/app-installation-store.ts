@@ -7,6 +7,9 @@ export type InstalledApp = {
   slug: string;
   app_name?: string;
   base_url: string;
+  app_version?: string;
+  manifest_version?: string;
+  fetched_at?: string;
   ui_url: string;
   ui_integrity: string;
   required_privileges: string[];
@@ -71,7 +74,7 @@ export class DbAppInstallationStore implements AppInstallationStore {
   async listInstalledApps(): Promise<InstalledApp[]> {
     const pool = getPool();
     const result = await pool.query(
-      `select app_id, slug, app_name, base_url, ui_url, ui_integrity, required_privileges, nav_entries, manifest_json, enabled
+      `select app_id, slug, app_name, base_url, app_version, manifest_version, fetched_at, ui_url, ui_integrity, required_privileges, nav_entries, manifest_json, enabled
        from core.installed_apps
        order by app_id asc`,
     );
@@ -83,6 +86,9 @@ export class DbAppInstallationStore implements AppInstallationStore {
         slug: row.slug,
         app_name: row.app_name ?? undefined,
         base_url: row.base_url,
+        app_version: row.app_version ?? undefined,
+        manifest_version: row.manifest_version ?? undefined,
+        fetched_at: row.fetched_at ? new Date(row.fetched_at).toISOString() : undefined,
         ui_url: row.ui_url,
         ui_integrity: row.ui_integrity,
         required_privileges: (row.required_privileges ?? []) as string[],
@@ -96,7 +102,7 @@ export class DbAppInstallationStore implements AppInstallationStore {
   async getApp(appId: string): Promise<InstalledApp | null> {
     const pool = getPool();
     const result = await pool.query(
-      `select app_id, slug, app_name, base_url, ui_url, ui_integrity, required_privileges, nav_entries, manifest_json, enabled
+      `select app_id, slug, app_name, base_url, app_version, manifest_version, fetched_at, ui_url, ui_integrity, required_privileges, nav_entries, manifest_json, enabled
        from core.installed_apps
        where app_id = $1`,
       [appId],
@@ -113,6 +119,9 @@ export class DbAppInstallationStore implements AppInstallationStore {
       slug: row.slug,
       app_name: row.app_name ?? undefined,
       base_url: row.base_url,
+      app_version: row.app_version ?? undefined,
+      manifest_version: row.manifest_version ?? undefined,
+      fetched_at: row.fetched_at ? new Date(row.fetched_at).toISOString() : undefined,
       ui_url: row.ui_url,
       ui_integrity: row.ui_integrity,
       required_privileges: (row.required_privileges ?? []) as string[],
@@ -135,6 +144,9 @@ export class DbAppInstallationStore implements AppInstallationStore {
          slug,
          app_name,
          base_url,
+         app_version,
+         manifest_version,
+         fetched_at,
          ui_url,
          ui_integrity,
          required_privileges,
@@ -144,12 +156,15 @@ export class DbAppInstallationStore implements AppInstallationStore {
          installed_at,
          updated_at
        )
-       values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, true, now(), now())
+       values ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9, $10, $11::jsonb, $12::jsonb, true, now(), now())
        on conflict (app_id)
        do update set
          slug = excluded.slug,
          app_name = excluded.app_name,
          base_url = excluded.base_url,
+         app_version = excluded.app_version,
+         manifest_version = excluded.manifest_version,
+         fetched_at = excluded.fetched_at,
          ui_url = excluded.ui_url,
          ui_integrity = excluded.ui_integrity,
          required_privileges = excluded.required_privileges,
@@ -162,6 +177,9 @@ export class DbAppInstallationStore implements AppInstallationStore {
         app.slug,
         appName,
         app.base_url,
+        app.app_version ?? null,
+        app.manifest_version ?? null,
+        app.fetched_at ?? new Date().toISOString(),
         app.ui_url,
         app.ui_integrity,
         app.required_privileges,

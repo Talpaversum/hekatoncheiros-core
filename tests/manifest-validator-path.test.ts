@@ -8,7 +8,7 @@ import { SCHEMA_PATH, validateManifest } from "../src/apps/manifest-validator.js
 
 function buildMinimalManifest(requiredPrivileges: string[]) {
   return {
-    app_id: "inventory-core",
+    app_id: "talpaversum/inventory-core",
     app_name: "Inventory Core",
     version: "1.0.0",
     vendor: {
@@ -30,6 +30,7 @@ function buildMinimalManifest(requiredPrivileges: string[]) {
       optional: [],
     },
     licensing: {
+      required: false,
       enforced_by_app: true,
       offline_supported: false,
       modes: ["perpetual"],

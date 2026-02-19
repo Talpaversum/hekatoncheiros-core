@@ -30,3 +30,8 @@ export async function ensurePlatformInstanceId(): Promise<string> {
 export async function getPlatformInstanceId(): Promise<string> {
   return ensurePlatformInstanceId();
 }
+
+export async function getPlatformInstanceAudienceId(): Promise<string> {
+  const instanceId = await getPlatformInstanceId();
+  return instanceId.startsWith("hcpi_") ? instanceId : `hcpi_${instanceId}`;
+}

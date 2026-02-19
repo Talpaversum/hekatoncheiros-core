@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 
 import { hasAllPrivileges } from "../../access/privileges.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
-import { resolveEntitlement } from "../../licensing/entitlement-service.js";
+import { getSelectedTenantLicense } from "../../licensing/license-service.js";
 import { ForbiddenError, NotFoundError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 
@@ -23,18 +23,18 @@ export async function registerAppEntitlementRoutes(app: FastifyInstance) {
     }
 
     const tenantId = request.requestContext.tenant.tenantId;
-    const resolved = await resolveEntitlement(tenantId, appInfo.app_id, new Date());
-    if (!resolved) {
+    const selected = await getSelectedTenantLicense(tenantId, appInfo.app_id);
+    if (!selected || selected.status !== "active") {
       return reply.code(204).send();
     }
 
     return reply.send({
-      tier: resolved.tier,
-      valid_from: resolved.valid_from,
-      valid_to: resolved.valid_to,
-      limits: resolved.limits,
-      source: resolved.source,
-      entitlement_id: resolved.entitlement_id,
+      tier: "licensed",
+      valid_from: selected.valid_from,
+      valid_to: selected.valid_to,
+      limits: {},
+      source: "LICENSE",
+      entitlement_id: selected.jti,
     });
   });
 }

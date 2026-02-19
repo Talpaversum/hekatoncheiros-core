@@ -17,6 +17,10 @@ const envSchema = z.object({
   LICENSING_CLOCK_SKEW_SECONDS: z.coerce.number().int().nonnegative().default(600),
   LICENSING_CLOCK_SOFT_GRACE_SECONDS: z.coerce.number().int().nonnegative().default(43200),
   OFFLINE_LICENSE_PUBLIC_KEYS_JSON: z.string().default("{}"),
+  LICENSING_ROOT_JWKS_JSON: z.string().default('{"keys":[]}'),
+  LICENSING_DCR_SIGNING_PRIVATE_JWK_JSON: z.string().default(""),
+  LICENSING_DCR_SIGNING_PUBLIC_JWK_JSON: z.string().default(""),
+  LICENSING_OAUTH_CALLBACK_BASE_URL: z.string().default("http://127.0.0.1:3000"),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

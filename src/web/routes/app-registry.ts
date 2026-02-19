@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 
 import { hasAllPrivileges } from "../../access/privileges.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
-import { resolveEntitlement } from "../../licensing/entitlement-service.js";
+import { hasSelectedActiveLicense } from "../../licensing/license-service.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 
 function readStringField(source: unknown, key: string): string | undefined {
@@ -31,8 +31,8 @@ export async function registerAppRegistryRoutes(app: FastifyInstance) {
     const entitledAppIds = new Set<string>();
     await Promise.all(
       apps.map(async (installedApp) => {
-        const resolved = await resolveEntitlement(tenantId, installedApp.app_id, new Date());
-        if (resolved) {
+        const hasLicense = await hasSelectedActiveLicense(tenantId, installedApp.app_id);
+        if (hasLicense) {
           entitledAppIds.add(installedApp.app_id);
         }
       }),

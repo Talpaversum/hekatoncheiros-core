@@ -8,7 +8,12 @@ import { issueInstallerToken } from "../../apps/installer-token.js";
 import { saveUiPluginArtifact } from "../../apps/ui-artifact-storage.js";
 import { recordAudit } from "../../audit/audit-service.js";
 import { getPool } from "../../db/pool.js";
-import { hasAnyEntitlement, resolveEntitlement } from "../../licensing/entitlement-service.js";
+import {
+  clearSelectedTenantLicense,
+  getSelectedTenantLicense,
+  hasAnyTenantLicense,
+  hasSelectedActiveLicense,
+} from "../../licensing/license-service.js";
 import { getTrustedOriginsStore } from "../../platform/trusted-origins-store.js";
 import { ForbiddenError, NotFoundError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
@@ -40,15 +45,26 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
 
     const items = await Promise.all(
       apps.map(async (installedApp) => {
-        const [resolvedEntitlement, anyEntitlement] = await Promise.all([
-          resolveEntitlement(tenantId, installedApp.app_id, new Date()),
-          hasAnyEntitlement(tenantId, installedApp.app_id),
+        const [selectedLicense, anyLicense] = await Promise.all([
+          getSelectedTenantLicense(tenantId, installedApp.app_id),
+          hasAnyTenantLicense(tenantId, installedApp.app_id),
         ]);
 
         return {
           ...installedApp,
-          resolved_entitlement: resolvedEntitlement,
-          has_any_entitlement: anyEntitlement,
+          resolved_entitlement: selectedLicense
+            ? {
+                entitlement_id: selectedLicense.jti,
+                tenant_id: selectedLicense.tenant_id,
+                app_id: selectedLicense.app_id,
+                source: "LICENSE",
+                tier: "licensed",
+                valid_from: selectedLicense.valid_from,
+                valid_to: selectedLicense.valid_to,
+                limits: {},
+              }
+            : null,
+          has_any_entitlement: anyLicense,
         };
       }),
     );
@@ -84,6 +100,20 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     }
 
     const appId = manifestAppId;
+
+    const licensing = (manifest["licensing"] as { required?: boolean } | undefined) ?? {};
+    const isLicenseRequired = licensing.required === true;
+    const tenantId = request.requestContext.tenant.tenantId;
+    if (isLicenseRequired) {
+      const hasSelectedActive = await hasSelectedActiveLicense(tenantId, appId);
+      if (!hasSelectedActive) {
+        return reply.code(409).send({
+          message: "Install blocked: manifest.licensing.required=true and no selected active license for tenant/app",
+          code: "license_required",
+          app_id: appId,
+        });
+      }
+    }
 
     const integration = manifest["integration"] as {
       slug?: string;
@@ -190,7 +220,7 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     });
 
     await recordAudit({
-      tenantId: request.requestContext.tenant.tenantId,
+      tenantId,
       actorUserId: request.requestContext.actor.userId,
       effectiveUserId: request.requestContext.actor.effectiveUserId,
       action: "platform.apps.install",
@@ -279,6 +309,8 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     if (!deleted) {
       throw new NotFoundError("App not installed");
     }
+
+    await clearSelectedTenantLicense(request.requestContext.tenant.tenantId, appId);
 
     await recordAudit({
       tenantId: request.requestContext.tenant.tenantId,

@@ -101,7 +101,7 @@ export async function registerLicensingRoutes(app: FastifyInstance) {
 
     return reply.send({
       app_id: appId ?? null,
-      selected_license_jti: selection?.jti ?? null,
+      selected_entitlement_id: selection?.jti ?? null,
       items,
     });
   });
@@ -126,7 +126,7 @@ export async function registerLicensingRoutes(app: FastifyInstance) {
     const selected = await getSelectedTenantLicense(tenantId, query.app_id);
     return reply.send({
       app_id: query.app_id,
-      selected_license_jti: selected?.jti ?? null,
+      selected_entitlement_id: selected?.jti ?? null,
       selected_license: selected,
     });
   });
@@ -143,13 +143,13 @@ export async function registerLicensingRoutes(app: FastifyInstance) {
     const tenantId = (request.params as { tenantId: string }).tenantId;
     assertTenantAccess(tenantId, request.requestContext.tenant.tenantId);
 
-    const body = request.body as { app_id: string; license_jti: string };
+    const body = request.body as { app_id: string; entitlement_id: string };
 
-    if (!body?.app_id || !body?.license_jti) {
-      return reply.code(400).send({ message: "app_id and license_jti are required" });
+    if (!body?.app_id || !body?.entitlement_id) {
+      return reply.code(400).send({ message: "app_id and entitlement_id are required" });
     }
 
-    await selectTenantLicense(tenantId, body.app_id, body.license_jti);
+    await selectTenantLicense(tenantId, body.app_id, body.entitlement_id);
     return reply.code(204).send();
   });
 
@@ -241,7 +241,7 @@ export async function registerLicensingRoutes(app: FastifyInstance) {
     });
   });
 
-  // Legacy compatibility endpoints (entitlement naming)
+  // Entitlement API for platform UI and app-management flows.
   app.get("/licensing/entitlements", async (request, reply) => {
     const config = app.config;
     await requireUserAuth(request, config);

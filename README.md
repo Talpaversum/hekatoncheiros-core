@@ -37,6 +37,40 @@ npm run dev
 
 API runs at `http://localhost:3000/api/v1` and the Swagger UI at `http://localhost:3000/docs`.
 
+## Docker Compose deployment
+
+The Compose deployment builds local images for Core and the web shell and runs:
+
+- PostgreSQL
+- Core API
+- web shell served by nginx, with `/api/v1/*` proxied to Core
+
+Start the stack:
+
+```bash
+docker compose up -d --build
+```
+
+Seed the default tenant and admin user once:
+
+```bash
+docker compose run --rm core-seed
+```
+
+Open:
+
+- Web shell: `http://localhost:8080`
+- Core API: `http://localhost:3000/api/v1`
+- Swagger UI: `http://localhost:8080/docs`
+
+Default seeded login:
+
+- email: `admin@example.com`
+- password: `admin`
+
+Override ports and secrets with environment variables or a local `.env` file.
+The built-in defaults are for development only.
+
 ## Scripts
 
 - `npm run dev` – dev server

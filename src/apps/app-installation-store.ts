@@ -16,6 +16,9 @@ export type InstalledApp = {
   nav_entries?: NavEntry[];
   enabled?: boolean;
   manifest: {
+    licensing?: {
+      required?: boolean;
+    };
     integration?: {
       ui?: {
         artifact?: {

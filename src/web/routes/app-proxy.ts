@@ -2,8 +2,13 @@ import type { FastifyInstance } from "fastify";
 
 import { hasAllPrivileges } from "../../access/privileges.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
+import { hasSelectedActiveLicense } from "../../licensing/license-service.js";
 import { ForbiddenError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
+
+function requiresLicense(app: { manifest?: { licensing?: { required?: boolean } } }): boolean {
+  return app.manifest?.licensing?.required === true;
+}
 
 export async function registerAppProxyRoutes(app: FastifyInstance) {
   app.all("/apps/:slug/*", async (request, reply) => {
@@ -17,8 +22,23 @@ export async function registerAppProxyRoutes(app: FastifyInstance) {
       return reply.code(404).send({ message: "Unknown app" });
     }
 
+    if (appInfo.enabled === false) {
+      return reply.code(404).send({ message: "Unknown app" });
+    }
+
     if (!hasAllPrivileges(request.requestContext.privileges, appInfo.required_privileges)) {
       throw new ForbiddenError();
+    }
+
+    if (requiresLicense(appInfo)) {
+      const hasLicense = await hasSelectedActiveLicense(request.requestContext.tenant.tenantId, appInfo.app_id);
+      if (!hasLicense) {
+        return reply.code(402).send({
+          message: "License required",
+          code: "license_required",
+          app_id: appInfo.app_id,
+        });
+      }
     }
 
     const basePath = `/api/v1/apps/${slug}`;

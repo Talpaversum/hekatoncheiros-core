@@ -19,6 +19,10 @@ function readStringField(source: unknown, key: string): string | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function requiresLicense(app: { manifest?: { licensing?: { required?: boolean } } }): boolean {
+  return app.manifest?.licensing?.required === true;
+}
+
 export async function registerAppRegistryRoutes(app: FastifyInstance) {
   app.get("/apps/registry", async (request, reply) => {
     const config = app.config;
@@ -40,7 +44,7 @@ export async function registerAppRegistryRoutes(app: FastifyInstance) {
 
     const items = apps
       .filter((app) => app.enabled !== false)
-      .filter((app) => entitledAppIds.has(app.app_id))
+      .filter((app) => !requiresLicense(app) || entitledAppIds.has(app.app_id))
       .filter((app) => hasAllPrivileges(request.requestContext.privileges, app.required_privileges))
       .map((app) => {
         const navEntries = app.nav_entries ?? app.manifest.integration?.ui?.nav_entries ?? [];

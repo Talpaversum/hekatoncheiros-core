@@ -12,7 +12,6 @@ import {
   clearSelectedTenantLicense,
   getSelectedTenantLicense,
   hasAnyTenantLicense,
-  hasSelectedActiveLicense,
 } from "../../licensing/license-service.js";
 import { getTrustedOriginsStore } from "../../platform/trusted-origins-store.js";
 import { ForbiddenError, NotFoundError } from "../../shared/errors.js";
@@ -101,19 +100,7 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
 
     const appId = manifestAppId;
 
-    const licensing = (manifest["licensing"] as { required?: boolean } | undefined) ?? {};
-    const isLicenseRequired = licensing.required === true;
     const tenantId = request.requestContext.tenant.tenantId;
-    if (isLicenseRequired) {
-      const hasSelectedActive = await hasSelectedActiveLicense(tenantId, appId);
-      if (!hasSelectedActive) {
-        return reply.code(409).send({
-          message: "Install blocked: manifest.licensing.required=true and no selected active license for tenant/app",
-          code: "license_required",
-          app_id: appId,
-        });
-      }
-    }
 
     const integration = manifest["integration"] as {
       slug?: string;

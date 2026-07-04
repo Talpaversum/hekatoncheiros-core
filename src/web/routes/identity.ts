@@ -6,6 +6,7 @@ import { z } from "zod";
 import { findPrivilegeDefinition, PRIVILEGE_CATALOG, tenantScopedPrivileges } from "../../access/privilege-catalog.js";
 import { hasPrivilege } from "../../access/privileges.js";
 import { recordAudit } from "../../audit/audit-service.js";
+import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { getPool } from "../../db/pool.js";
 import { ForbiddenError, HttpError, NotFoundError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
@@ -103,11 +104,52 @@ function mapTenant(row: Record<string, unknown>) {
   };
 }
 
-function validatePlatformGrants(grants: PrivilegeGrant[]) {
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+async function listPrivilegeDefinitions() {
+  const definitions = new Map(PRIVILEGE_CATALOG.map((item) => [item.id, item]));
+  const installedApps = await getAppInstallationStore().listInstalledApps();
+
+  for (const app of installedApps) {
+    const manifest = app.manifest as Record<string, unknown>;
+    const appName = typeof manifest["app_name"] === "string" ? manifest["app_name"] : app.app_id;
+    const privileges = manifest["privileges"] as { required?: unknown; optional?: unknown } | undefined;
+    const ids = [...readStringArray(privileges?.required), ...readStringArray(privileges?.optional)];
+
+    for (const id of ids) {
+      if (!definitions.has(id)) {
+        definitions.set(id, {
+          id,
+          label: id,
+          description: `${appName} app privilege.`,
+          scope: "tenant",
+        });
+      }
+    }
+  }
+
+  return [...definitions.values()].sort((left, right) => {
+    if (left.scope !== right.scope) {
+      return left.scope.localeCompare(right.scope);
+    }
+    return left.id.localeCompare(right.id);
+  });
+}
+
+async function getPrivilegeDefinition(id: string) {
+  return (await listPrivilegeDefinitions()).find((item) => item.id === id);
+}
+
+async function validatePlatformGrants(grants: PrivilegeGrant[]) {
   const seen = new Set<string>();
 
   for (const grant of grants) {
-    const definition = findPrivilegeDefinition(grant.privilege);
+    const definition = await getPrivilegeDefinition(grant.privilege);
     if (!definition) {
       throw new HttpError(400, `Unknown privilege: ${grant.privilege}`);
     }
@@ -124,8 +166,8 @@ function validatePlatformGrants(grants: PrivilegeGrant[]) {
   }
 }
 
-function validateTenantGrants(grants: PrivilegeGrant[], tenantId: string) {
-  const tenantPrivileges = new Set(tenantScopedPrivileges().map((item) => item.id));
+async function validateTenantGrants(grants: PrivilegeGrant[], tenantId: string) {
+  const tenantPrivileges = new Set((await listPrivilegeDefinitions()).filter((item) => item.scope === "tenant").map((item) => item.id));
   const seen = new Set<string>();
 
   for (const grant of grants) {
@@ -153,7 +195,7 @@ async function assertUserExists(userId: string) {
 export async function registerIdentityRoutes(app: FastifyInstance) {
   app.get("/rbac/privileges", async (request, reply) => {
     await requireUserAuth(request, app.config);
-    return reply.send({ items: PRIVILEGE_CATALOG });
+    return reply.send({ items: await listPrivilegeDefinitions() });
   });
 
   app.get("/identity/users", async (request, reply) => {
@@ -277,7 +319,7 @@ export async function registerIdentityRoutes(app: FastifyInstance) {
       privilege: grant.privilege,
       tenant_id: grant.tenant_id ?? null,
     }));
-    validatePlatformGrants(grants);
+    await validatePlatformGrants(grants);
 
     const pool = getPool();
     const client = await pool.connect();
@@ -423,7 +465,7 @@ export async function registerIdentityRoutes(app: FastifyInstance) {
       privilege: grant.privilege,
       tenant_id: tenantId,
     }));
-    validateTenantGrants(grants, tenantId);
+    await validateTenantGrants(grants, tenantId);
     await assertUserExists(params.userId);
 
     const pool = getPool();

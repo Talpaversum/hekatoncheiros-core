@@ -1,7 +1,8 @@
-import type { FetchManifestResult } from "./manifest-fetcher.js";
 import { getPool } from "../db/pool.js";
+import type { FetchManifestResult } from "./manifest-fetcher.js";
 
 type CatalogMetadata = Record<string, unknown>;
+type CatalogDeployment = Record<string, unknown> & { type?: string };
 
 export type AppCatalogEntry = {
   app_id: string;
@@ -21,6 +22,7 @@ export type AppCatalogEntry = {
   license_required: boolean;
   license_issuer_url: string | null;
   metadata: CatalogMetadata;
+  deployment: CatalogDeployment;
   created_by: string | null;
   fetched_at: string;
   created_at: string;
@@ -105,6 +107,7 @@ function mapRow(row: Record<string, unknown>): AppCatalogEntry {
     license_required: Boolean(row["license_required"]),
     license_issuer_url: (row["license_issuer_url"] as string | null) ?? null,
     metadata: (row["metadata_json"] ?? {}) as CatalogMetadata,
+    deployment: (row["deployment_json"] ?? { type: "external" }) as CatalogDeployment,
     created_by: (row["created_by"] as string | null) ?? null,
     fetched_at: new Date(String(row["fetched_at"])).toISOString(),
     created_at: new Date(String(row["created_at"])).toISOString(),
@@ -118,7 +121,7 @@ export class AppCatalogStore {
     const result = await pool.query(
       `select app_id, source_id, source_type, trust_status, author_id, namespace, slug, app_name,
               app_version, summary, base_url, manifest_url, manifest_hash, manifest_version,
-              license_required, license_issuer_url, metadata_json, created_by, fetched_at,
+              license_required, license_issuer_url, metadata_json, deployment_json, created_by, fetched_at,
               created_at, updated_at
          from core.app_catalog_entries
         order by app_name asc, app_id asc`,
@@ -132,7 +135,7 @@ export class AppCatalogStore {
     const result = await pool.query(
       `select app_id, source_id, source_type, trust_status, author_id, namespace, slug, app_name,
               app_version, summary, base_url, manifest_url, manifest_hash, manifest_version,
-              license_required, license_issuer_url, metadata_json, created_by, fetched_at,
+              license_required, license_issuer_url, metadata_json, deployment_json, created_by, fetched_at,
               created_at, updated_at
          from core.app_catalog_entries
         where app_id = $1`,
@@ -165,11 +168,12 @@ export class AppCatalogStore {
          license_required,
          license_issuer_url,
          metadata_json,
+         deployment_json,
          created_by,
          fetched_at,
          updated_at
        )
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18::timestamptz, now())
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb, $18, $19::timestamptz, now())
        on conflict (app_id)
        do update set
          source_id = excluded.source_id,
@@ -187,11 +191,12 @@ export class AppCatalogStore {
          license_required = excluded.license_required,
          license_issuer_url = excluded.license_issuer_url,
          metadata_json = excluded.metadata_json,
+         deployment_json = excluded.deployment_json,
          fetched_at = excluded.fetched_at,
          updated_at = now()
        returning app_id, source_id, source_type, trust_status, author_id, namespace, slug, app_name,
                  app_version, summary, base_url, manifest_url, manifest_hash, manifest_version,
-                 license_required, license_issuer_url, metadata_json, created_by, fetched_at,
+                 license_required, license_issuer_url, metadata_json, deployment_json, created_by, fetched_at,
                  created_at, updated_at`,
       [
         metadata.appId,
@@ -211,6 +216,10 @@ export class AppCatalogStore {
         metadata.licenseIssuerUrl,
         JSON.stringify({
           manifest: input.fetched.manifest,
+        }),
+        JSON.stringify({
+          type: "external",
+          base_url: input.fetched.normalizedBaseUrl,
         }),
         input.createdBy ?? null,
         input.fetched.fetchedAt,

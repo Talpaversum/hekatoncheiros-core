@@ -212,16 +212,7 @@ export async function registerLicensingRoutes(app: FastifyInstance) {
   });
 
   app.get("/tenants/:tenantId/licenses/oauth/callback", async (request, reply) => {
-    const config = app.config;
-    await requireUserAuth(request, config);
-
-    const privileges = request.requestContext.privileges;
-    if (!privileges.includes("core.licensing.ingest_offline")) {
-      throw new ForbiddenError();
-    }
-
     const tenantId = (request.params as { tenantId: string }).tenantId;
-    assertTenantAccess(tenantId, request.requestContext.tenant.tenantId);
 
     const query = request.query as { code?: string; state?: string };
     if (!query.code || !query.state) {
@@ -234,11 +225,22 @@ export async function registerLicensingRoutes(app: FastifyInstance) {
       state: query.state,
     });
 
-    return reply.send({
+    const payload = {
       status: "imported",
       auto_selected: completed.auto_selected,
       item: completed.imported,
-    });
+    };
+
+    if (request.headers.authorization || String(request.headers.accept ?? "").includes("application/json")) {
+      return reply.send(payload);
+    }
+
+    const redirectUrl = new URL("/core/apps/licensing", app.config.LICENSING_OAUTH_CALLBACK_BASE_URL);
+    redirectUrl.searchParams.set("license_oauth", "success");
+    redirectUrl.searchParams.set("app_id", completed.imported.app_id);
+    redirectUrl.searchParams.set("license_jti", completed.imported.jti);
+    redirectUrl.searchParams.set("auto_selected", completed.auto_selected ? "true" : "false");
+    return reply.redirect(redirectUrl.toString());
   });
 
   // Entitlement API for platform UI and app-management flows.

@@ -5,6 +5,7 @@ import swaggerUi from "@fastify/swagger-ui";
 
 import { loadConfig, type EnvConfig } from "./config/index.js";
 import { registerPipeline } from "./platform/pipeline.js";
+import { registerAppCatalogPublicRoutes } from "./web/routes/app-catalog.js";
 import { registerRoutes } from "./web/routes/index.js";
 
 declare module "fastify" {
@@ -38,6 +39,7 @@ export async function buildApp() {
   });
 
   registerPipeline(app);
+  await registerAppCatalogPublicRoutes(app);
   await app.register(async (instance) => {
     instance.register(registerRoutes, { prefix: "/api/v1" });
   });

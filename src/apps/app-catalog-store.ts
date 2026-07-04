@@ -37,6 +37,11 @@ export type AppCatalogEntry = {
   license_issuer_url: string | null;
   metadata: CatalogMetadata;
   deployment: CatalogDeployment;
+  published: boolean;
+  publish_status: "draft" | "pending" | "published" | "rejected";
+  published_at: string | null;
+  published_by: string | null;
+  publish_note: string | null;
   created_by: string | null;
   fetched_at: string;
   created_at: string;
@@ -132,6 +137,11 @@ function mapRow(row: Record<string, unknown>): AppCatalogEntry {
     license_issuer_url: (row["license_issuer_url"] as string | null) ?? null,
     metadata: (row["metadata_json"] ?? {}) as CatalogMetadata,
     deployment: (row["deployment_json"] ?? { type: "external" }) as CatalogDeployment,
+    published: Boolean(row["published"]),
+    publish_status: String(row["publish_status"] ?? "draft") as AppCatalogEntry["publish_status"],
+    published_at: row["published_at"] ? new Date(String(row["published_at"])).toISOString() : null,
+    published_by: (row["published_by"] as string | null) ?? null,
+    publish_note: (row["publish_note"] as string | null) ?? null,
     created_by: (row["created_by"] as string | null) ?? null,
     fetched_at: new Date(String(row["fetched_at"])).toISOString(),
     created_at: new Date(String(row["created_at"])).toISOString(),
@@ -248,8 +258,8 @@ export class AppCatalogStore {
     const result = await pool.query(
       `select app_id, source_id, source_type, trust_status, author_id, namespace, slug, app_name,
               app_version, summary, base_url, manifest_url, manifest_hash, manifest_version,
-              license_required, license_issuer_url, metadata_json, deployment_json, created_by, fetched_at,
-              created_at, updated_at
+              license_required, license_issuer_url, metadata_json, deployment_json, published, publish_status,
+              published_at, published_by, publish_note, created_by, fetched_at, created_at, updated_at
          from core.app_catalog_entries
         order by app_name asc, app_id asc`,
     );
@@ -262,14 +272,30 @@ export class AppCatalogStore {
     const result = await pool.query(
       `select app_id, source_id, source_type, trust_status, author_id, namespace, slug, app_name,
               app_version, summary, base_url, manifest_url, manifest_hash, manifest_version,
-              license_required, license_issuer_url, metadata_json, deployment_json, created_by, fetched_at,
-              created_at, updated_at
+              license_required, license_issuer_url, metadata_json, deployment_json, published, publish_status,
+              published_at, published_by, publish_note, created_by, fetched_at, created_at, updated_at
          from core.app_catalog_entries
         where app_id = $1`,
       [appId],
     );
 
     return result.rowCount ? mapRow(result.rows[0]) : null;
+  }
+
+  async listPublishedEntries(): Promise<AppCatalogEntry[]> {
+    const pool = getPool();
+    const result = await pool.query(
+      `select app_id, source_id, source_type, trust_status, author_id, namespace, slug, app_name,
+              app_version, summary, base_url, manifest_url, manifest_hash, manifest_version,
+              license_required, license_issuer_url, metadata_json, deployment_json, published, publish_status,
+              published_at, published_by, publish_note, created_by, fetched_at, created_at, updated_at
+         from core.app_catalog_entries
+        where published = true
+          and publish_status = 'published'
+        order by app_name asc, app_id asc`,
+    );
+
+    return result.rows.map((row) => mapRow(row));
   }
 
   async upsertFromManifest(input: UpsertCatalogEntryInput): Promise<AppCatalogEntry> {
@@ -325,8 +351,8 @@ export class AppCatalogStore {
          updated_at = now()
        returning app_id, source_id, source_type, trust_status, author_id, namespace, slug, app_name,
                  app_version, summary, base_url, manifest_url, manifest_hash, manifest_version,
-                 license_required, license_issuer_url, metadata_json, deployment_json, created_by, fetched_at,
-                 created_at, updated_at`,
+                 license_required, license_issuer_url, metadata_json, deployment_json, published, publish_status,
+                 published_at, published_by, publish_note, created_by, fetched_at, created_at, updated_at`,
       [
         metadata.appId,
         input.sourceId ?? null,
@@ -364,6 +390,37 @@ export class AppCatalogStore {
     const pool = getPool();
     const result = await pool.query("delete from core.app_catalog_entries where app_id = $1", [appId]);
     return (result.rowCount ?? 0) > 0;
+  }
+
+  async setEntryPublished({
+    appId,
+    published,
+    actorUserId,
+    note,
+  }: {
+    appId: string;
+    published: boolean;
+    actorUserId: string;
+    note?: string | null;
+  }): Promise<AppCatalogEntry | null> {
+    const pool = getPool();
+    const result = await pool.query(
+      `update core.app_catalog_entries
+          set published = $2,
+              publish_status = case when $2 then 'published' else 'draft' end,
+              published_at = case when $2 then now() else null end,
+              published_by = case when $2 then $3 else null end,
+              publish_note = $4,
+              updated_at = now()
+        where app_id = $1
+        returning app_id, source_id, source_type, trust_status, author_id, namespace, slug, app_name,
+                  app_version, summary, base_url, manifest_url, manifest_hash, manifest_version,
+                  license_required, license_issuer_url, metadata_json, deployment_json, published, publish_status,
+                  published_at, published_by, publish_note, created_by, fetched_at, created_at, updated_at`,
+      [appId, published, actorUserId, note ?? null],
+    );
+
+    return result.rowCount ? mapRow(result.rows[0]) : null;
   }
 }
 

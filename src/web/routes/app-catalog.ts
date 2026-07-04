@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { hasPrivilege } from "../../access/privileges.js";
 import { syncCatalogFeedSource } from "../../apps/app-catalog-feed-sync.js";
-import { getAppCatalogStore } from "../../apps/app-catalog-store.js";
+import { getAppCatalogStore, type AppCatalogEntry } from "../../apps/app-catalog-store.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { installFetchedApp } from "../../apps/app-installer.js";
 import { fetchManifest } from "../../apps/manifest-fetcher.js";
@@ -11,6 +11,7 @@ import {
   getSelectedTenantLicense,
   hasAnyTenantLicense,
 } from "../../licensing/license-service.js";
+import { getPlatformInstanceId } from "../../licensing/platform-instance-service.js";
 import { getTrustedOriginsStore } from "../../platform/trusted-origins-store.js";
 import { ForbiddenError, NotFoundError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
@@ -33,6 +34,11 @@ const patchFeedSourceSchema = z.object({
 
 const installFromCatalogSchema = z.object({
   mode: z.enum(["external", "stage_only", "compose"]).default("external"),
+});
+
+const publishCatalogEntrySchema = z.object({
+  published: z.boolean(),
+  note: z.string().trim().max(500).optional().nullable(),
 });
 
 function requireAppCatalogManage(request: { requestContext: { privileges: string[] } }) {
@@ -62,6 +68,40 @@ function buildDeploymentPlan(entry: { app_id: string; slug: string; base_url: st
     host_mounts_allowed: false,
     requires_approval: true,
   };
+}
+
+function toFeedItem(entry: AppCatalogEntry) {
+  return {
+    app_id: entry.app_id,
+    name: entry.app_name,
+    version: entry.app_version,
+    manifest_url: entry.manifest_url,
+    manifest_sha256: entry.manifest_hash,
+    author_id: entry.author_id,
+    author_namespace: entry.namespace,
+    summary: entry.summary,
+    license_required: entry.license_required,
+    license_issuer_url: entry.license_issuer_url,
+    deployment: entry.deployment,
+  };
+}
+
+export async function registerAppCatalogPublicRoutes(app: FastifyInstance) {
+  app.get("/.well-known/hc/app-catalog.json", async (_request, reply) => {
+    const entries = await getAppCatalogStore().listPublishedEntries();
+    const items = entries.map((entry) => toFeedItem(entry));
+    const instanceId = await getPlatformInstanceId();
+
+    return reply.send({
+      catalog_version: 1,
+      publisher: {
+        instance_id: instanceId,
+        name: "Hekatoncheiros Core",
+      },
+      generated_at: new Date().toISOString(),
+      items,
+    });
+  });
 }
 
 export async function registerAppCatalogRoutes(app: FastifyInstance) {
@@ -263,6 +303,38 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
       }
       return reply.code(400).send({ message });
     }
+  });
+
+  app.patch("/apps/catalog/entries/:app_id/publication", async (request, reply) => {
+    await requireUserAuth(request, app.config);
+    requireAppCatalogManage(request);
+
+    const parsed = publishCatalogEntrySchema.parse(request.body);
+    const appId = (request.params as { app_id: string }).app_id;
+    const existing = await getAppCatalogStore().getEntry(appId);
+    if (!existing) {
+      throw new NotFoundError("Catalog entry not found");
+    }
+
+    if (parsed.published) {
+      const installedApps = await getAppInstallationStore().listInstalledApps();
+      const installed = installedApps.find((appEntry) => appEntry.app_id === appId && appEntry.enabled !== false);
+      if (!installed) {
+        return reply.code(409).send({ message: "Only installed and enabled apps can be published to the feed" });
+      }
+    }
+
+    const entry = await getAppCatalogStore().setEntryPublished({
+      appId,
+      published: parsed.published,
+      actorUserId: request.requestContext.actor.userId,
+      note: parsed.note ?? null,
+    });
+    if (!entry) {
+      throw new NotFoundError("Catalog entry not found");
+    }
+
+    return reply.send(entry);
   });
 
   app.delete("/apps/catalog/entries/:app_id", async (request, reply) => {

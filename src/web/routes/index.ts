@@ -9,6 +9,8 @@ import { registerAppEntitlementRoutes } from "./app-entitlement.js";
 import { registerAppUiAssetRoutes } from "./app-ui-assets.js";
 import { registerAuthRoutes } from "./auth.js";
 import { registerAuditRoutes } from "./audit.js";
+import { registerAccountRoutes } from "./account.js";
+import { registerConfigurationRoutes } from "./configuration.js";
 import { registerContextRoutes } from "./context.js";
 import { registerEventRoutes } from "./events.js";
 import { registerHealthRoutes } from "./health.js";
@@ -18,7 +20,9 @@ import { registerPlatformTrustedOriginsRoutes } from "./platform-trusted-origins
 export async function registerRoutes(app: FastifyInstance) {
   await registerHealthRoutes(app);
   await registerAuthRoutes(app);
+  await registerAccountRoutes(app);
   await registerContextRoutes(app);
+  await registerConfigurationRoutes(app);
   await registerLicensingRoutes(app);
   await registerPlatformTrustedOriginsRoutes(app);
   await registerAppRoutes(app);

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import { registerAppRoutes } from "./apps.js";
+import { registerAppCatalogRoutes } from "./app-catalog.js";
 import { registerInstalledAppRoutes } from "./apps-installed.js";
 import { registerAppProxyRoutes } from "./app-proxy.js";
 import { registerAppRegistryRoutes } from "./app-registry.js";
@@ -21,6 +22,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerLicensingRoutes(app);
   await registerPlatformTrustedOriginsRoutes(app);
   await registerAppRoutes(app);
+  await registerAppCatalogRoutes(app);
   await registerInstalledAppRoutes(app);
   await registerAppRegistryRoutes(app);
   await registerAppEntitlementRoutes(app);

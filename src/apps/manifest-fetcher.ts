@@ -111,7 +111,7 @@ function isBlockedIp(ip: string): boolean {
   return true;
 }
 
-async function assertPublicOrigin(originUrl: URL): Promise<void> {
+export async function assertPublicOrigin(originUrl: URL): Promise<void> {
   const hostname = canonicalizeHost(originUrl.hostname);
 
   if (hostname === "localhost" || hostname.endsWith(".local") || METADATA_HOSTS.has(hostname)) {

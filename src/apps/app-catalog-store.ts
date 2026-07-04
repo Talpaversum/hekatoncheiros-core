@@ -4,6 +4,20 @@ import type { FetchManifestResult } from "./manifest-fetcher.js";
 type CatalogMetadata = Record<string, unknown>;
 type CatalogDeployment = Record<string, unknown> & { type?: string };
 
+export type AppCatalogSource = {
+  id: string;
+  name: string;
+  source_type: "manual" | "feed";
+  feed_url: string | null;
+  trust_mode: "dev" | "manual" | "verified" | "official";
+  is_enabled: boolean;
+  last_sync_at: string | null;
+  last_error: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AppCatalogEntry = {
   app_id: string;
   source_id: string | null;
@@ -34,7 +48,17 @@ export type UpsertCatalogEntryInput = {
   sourceId?: string | null;
   sourceType?: "manual" | "feed";
   trustStatus?: AppCatalogEntry["trust_status"];
+  authorId?: string | null;
   summary?: string | null;
+  metadata?: CatalogMetadata;
+  deployment?: CatalogDeployment;
+  createdBy?: string | null;
+};
+
+export type CreateCatalogSourceInput = {
+  name: string;
+  feedUrl: string;
+  trustMode?: AppCatalogSource["trust_mode"];
   createdBy?: string | null;
 };
 
@@ -115,7 +139,110 @@ function mapRow(row: Record<string, unknown>): AppCatalogEntry {
   };
 }
 
+function mapSourceRow(row: Record<string, unknown>): AppCatalogSource {
+  return {
+    id: String(row["id"]),
+    name: String(row["name"]),
+    source_type: String(row["source_type"]) as AppCatalogSource["source_type"],
+    feed_url: (row["feed_url"] as string | null) ?? null,
+    trust_mode: String(row["trust_mode"]) as AppCatalogSource["trust_mode"],
+    is_enabled: Boolean(row["is_enabled"]),
+    last_sync_at: row["last_sync_at"] ? new Date(String(row["last_sync_at"])).toISOString() : null,
+    last_error: (row["last_error"] as string | null) ?? null,
+    created_by: (row["created_by"] as string | null) ?? null,
+    created_at: new Date(String(row["created_at"])).toISOString(),
+    updated_at: new Date(String(row["updated_at"])).toISOString(),
+  };
+}
+
+function normalizeFeedUrl(input: string): string {
+  const parsed = new URL(input.trim());
+  if (parsed.username || parsed.password) {
+    throw new Error("feed_url must not include username/password");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("feed_url must use http or https");
+  }
+  if (parsed.pathname === "/" || parsed.pathname === "") {
+    parsed.pathname = "/.well-known/hc/app-catalog.json";
+  }
+  parsed.hash = "";
+  return parsed.toString();
+}
+
 export class AppCatalogStore {
+  async listSources(): Promise<AppCatalogSource[]> {
+    const pool = getPool();
+    const result = await pool.query(
+      `select id, name, source_type, feed_url, trust_mode, is_enabled, last_sync_at, last_error,
+              created_by, created_at, updated_at
+         from core.app_catalog_sources
+        order by created_at desc`,
+    );
+
+    return result.rows.map((row) => mapSourceRow(row));
+  }
+
+  async getSource(id: string): Promise<AppCatalogSource | null> {
+    const pool = getPool();
+    const result = await pool.query(
+      `select id, name, source_type, feed_url, trust_mode, is_enabled, last_sync_at, last_error,
+              created_by, created_at, updated_at
+         from core.app_catalog_sources
+        where id = $1`,
+      [id],
+    );
+
+    return result.rowCount ? mapSourceRow(result.rows[0]) : null;
+  }
+
+  async createFeedSource(input: CreateCatalogSourceInput): Promise<AppCatalogSource> {
+    const pool = getPool();
+    const feedUrl = normalizeFeedUrl(input.feedUrl);
+    const result = await pool.query(
+      `insert into core.app_catalog_sources (name, source_type, feed_url, trust_mode, created_by)
+       values ($1, 'feed', $2, $3, $4)
+       on conflict (feed_url)
+       do update set
+         name = excluded.name,
+         trust_mode = excluded.trust_mode,
+         is_enabled = true,
+         updated_at = now()
+       returning id, name, source_type, feed_url, trust_mode, is_enabled, last_sync_at, last_error,
+                 created_by, created_at, updated_at`,
+      [input.name.trim(), feedUrl, input.trustMode ?? "manual", input.createdBy ?? null],
+    );
+
+    return mapSourceRow(result.rows[0]);
+  }
+
+  async setSourceEnabled(id: string, isEnabled: boolean): Promise<AppCatalogSource | null> {
+    const pool = getPool();
+    const result = await pool.query(
+      `update core.app_catalog_sources
+          set is_enabled = $2,
+              updated_at = now()
+        where id = $1
+        returning id, name, source_type, feed_url, trust_mode, is_enabled, last_sync_at, last_error,
+                  created_by, created_at, updated_at`,
+      [id, isEnabled],
+    );
+
+    return result.rowCount ? mapSourceRow(result.rows[0]) : null;
+  }
+
+  async markSourceSync(id: string, error: string | null): Promise<void> {
+    const pool = getPool();
+    await pool.query(
+      `update core.app_catalog_sources
+          set last_sync_at = now(),
+              last_error = $2,
+              updated_at = now()
+        where id = $1`,
+      [id, error],
+    );
+  }
+
   async listEntries(): Promise<AppCatalogEntry[]> {
     const pool = getPool();
     const result = await pool.query(
@@ -156,6 +283,7 @@ export class AppCatalogStore {
          source_id,
          source_type,
          trust_status,
+         author_id,
          namespace,
          slug,
          app_name,
@@ -173,12 +301,13 @@ export class AppCatalogStore {
          fetched_at,
          updated_at
        )
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb, $18, $19::timestamptz, now())
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18::jsonb, $19, $20::timestamptz, now())
        on conflict (app_id)
        do update set
          source_id = excluded.source_id,
          source_type = excluded.source_type,
          trust_status = excluded.trust_status,
+         author_id = excluded.author_id,
          namespace = excluded.namespace,
          slug = excluded.slug,
          app_name = excluded.app_name,
@@ -203,6 +332,7 @@ export class AppCatalogStore {
         input.sourceId ?? null,
         input.sourceType ?? "manual",
         input.trustStatus ?? "manual",
+        input.authorId ?? null,
         namespace,
         metadata.slug,
         metadata.appName,
@@ -216,8 +346,9 @@ export class AppCatalogStore {
         metadata.licenseIssuerUrl,
         JSON.stringify({
           manifest: input.fetched.manifest,
+          ...(input.metadata ?? {}),
         }),
-        JSON.stringify({
+        JSON.stringify(input.deployment ?? {
           type: "external",
           base_url: input.fetched.normalizedBaseUrl,
         }),

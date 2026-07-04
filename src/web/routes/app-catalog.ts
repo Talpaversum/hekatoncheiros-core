@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { hasPrivilege } from "../../access/privileges.js";
+import { syncCatalogFeedSource } from "../../apps/app-catalog-feed-sync.js";
 import { getAppCatalogStore } from "../../apps/app-catalog-store.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { installFetchedApp } from "../../apps/app-installer.js";
@@ -18,6 +19,16 @@ const upsertFromManifestSchema = z.object({
   base_url: z.string().url(),
   summary: z.string().trim().max(500).optional().nullable(),
   trust_status: z.enum(["dev", "manual", "unverified"]).optional(),
+});
+
+const createFeedSourceSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  feed_url: z.string().url(),
+  trust_mode: z.enum(["dev", "manual", "verified", "official"]).default("manual"),
+});
+
+const patchFeedSourceSchema = z.object({
+  is_enabled: z.boolean(),
 });
 
 const installFromCatalogSchema = z.object({
@@ -102,6 +113,68 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
     );
 
     return reply.send({ items });
+  });
+
+  app.get("/apps/catalog/sources", async (request, reply) => {
+    await requireUserAuth(request, app.config);
+    requireAppCatalogManage(request);
+
+    const items = await getAppCatalogStore().listSources();
+    return reply.send({ items });
+  });
+
+  app.post("/apps/catalog/sources", async (request, reply) => {
+    await requireUserAuth(request, app.config);
+    requireAppCatalogManage(request);
+
+    const parsed = createFeedSourceSchema.parse(request.body);
+    try {
+      const source = await getAppCatalogStore().createFeedSource({
+        name: parsed.name,
+        feedUrl: parsed.feed_url,
+        trustMode: parsed.trust_mode,
+        createdBy: request.requestContext.actor.userId,
+      });
+      return reply.code(201).send(source);
+    } catch (error) {
+      return reply.code(400).send({ message: (error as Error).message });
+    }
+  });
+
+  app.patch("/apps/catalog/sources/:id", async (request, reply) => {
+    await requireUserAuth(request, app.config);
+    requireAppCatalogManage(request);
+
+    const id = (request.params as { id: string }).id;
+    const parsed = patchFeedSourceSchema.parse(request.body);
+    const source = await getAppCatalogStore().setSourceEnabled(id, parsed.is_enabled);
+    if (!source) {
+      throw new NotFoundError("Catalog source not found");
+    }
+
+    return reply.send(source);
+  });
+
+  app.post("/apps/catalog/sources/:id/sync", async (request, reply) => {
+    await requireUserAuth(request, app.config);
+    requireAppCatalogManage(request);
+
+    const id = (request.params as { id: string }).id;
+    const source = await getAppCatalogStore().getSource(id);
+    if (!source) {
+      throw new NotFoundError("Catalog source not found");
+    }
+
+    try {
+      const result = await syncCatalogFeedSource({
+        source,
+        actorUserId: request.requestContext.actor.userId,
+        isTrustedOrigin,
+      });
+      return reply.send(result);
+    } catch (error) {
+      return reply.code(400).send({ message: (error as Error).message });
+    }
   });
 
   app.post("/apps/catalog/entries/from-manifest", async (request, reply) => {

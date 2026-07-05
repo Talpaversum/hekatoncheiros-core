@@ -15,6 +15,7 @@ import {
 import { loadConfig } from "../config/index.js";
 import { getPool } from "../db/pool.js";
 import { HttpError, NotFoundError } from "../shared/errors.js";
+
 import { assertAuthorScopedAppId, isValidAuthorScopedAppId } from "./app-id.js";
 import { getPlatformInstanceAudienceId } from "./platform-instance-service.js";
 

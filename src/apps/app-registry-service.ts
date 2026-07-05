@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
 
-import { getPool } from "../db/pool.js";
 import { loadConfig, type EnvConfig } from "../config/index.js";
-import { issueInstallationCompleteToken } from "./installer-token.js";
+import { getPool } from "../db/pool.js";
 
 import { deriveAppSchemaName } from "./app-schema.js";
-
+import { issueInstallationCompleteToken } from "./installer-token.js";
 import type { AppManifest } from "./manifest-validator.js";
 
 export interface AppRegisterResponse {
@@ -147,7 +146,6 @@ export async function registerApp(manifest: AppManifest): Promise<AppRegisterRes
   const appId = (manifest["app_id"] ?? "") as string;
   const version = (manifest["version"] ?? "") as string;
   const vendor = (manifest["vendor"] as { name?: string } | undefined)?.name ?? "unknown";
-  const manifestJson = JSON.stringify(manifest);
   const integration = manifest["integration"] as {
     slug?: string;
     api?: { exposes?: { base_path?: string } };

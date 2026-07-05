@@ -4,8 +4,8 @@ import { z } from "zod";
 
 import { hasPrivilege } from "../../access/privileges.js";
 import { getAppCatalogStore } from "../../apps/app-catalog-store.js";
-import { installFetchedApp } from "../../apps/app-installer.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
+import { installFetchedApp } from "../../apps/app-installer.js";
 import { fetchManifest } from "../../apps/manifest-fetcher.js";
 import { recordAudit } from "../../audit/audit-service.js";
 import { getPool } from "../../db/pool.js";

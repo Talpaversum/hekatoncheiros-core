@@ -1,5 +1,6 @@
 import { recordAudit } from "../audit/audit-service.js";
 import type { EnvConfig } from "../config/index.js";
+
 import { getAppInstallationStore } from "./app-installation-service.js";
 import { issueInstallerToken } from "./installer-token.js";
 import type { FetchManifestResult } from "./manifest-fetcher.js";

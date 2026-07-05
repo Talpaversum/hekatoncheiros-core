@@ -1,10 +1,10 @@
-import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { ValidateFunction } from "ajv";
-import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

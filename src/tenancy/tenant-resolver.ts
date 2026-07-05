@@ -1,9 +1,9 @@
 import type { FastifyRequest } from "fastify";
 
 import type { EnvConfig } from "../config/index.js";
+import { loadConfig } from "../config/index.js";
 import type { TenantContext } from "../platform/request-context.js";
 
-import { loadConfig } from "../config/index.js";
 
 export interface TenantResolver {
   resolve(request: FastifyRequest, config: EnvConfig): Promise<string | null>;

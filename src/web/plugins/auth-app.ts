@@ -1,10 +1,8 @@
 import type { FastifyRequest } from "fastify";
-
 import { jwtVerify } from "jose";
 
 import type { EnvConfig } from "../../config/index.js";
 import type { ActorContext } from "../../platform/request-context.js";
-
 import { UnauthorizedError } from "../../shared/errors.js";
 
 export interface AppClaims {

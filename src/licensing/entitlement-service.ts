@@ -5,8 +5,9 @@ import { decodeProtectedHeader, importSPKI, jwtVerify, type JWTPayload } from "j
 import { loadConfig } from "../config/index.js";
 import { getPool } from "../db/pool.js";
 import { HttpError, NotFoundError } from "../shared/errors.js";
-import { getTierPriority } from "./tier-priority.js";
+
 import { getPlatformInstanceId } from "./platform-instance-service.js";
+import { getTierPriority } from "./tier-priority.js";
 
 export interface TenantAppEntitlement {
   id: string;
@@ -108,7 +109,7 @@ function evaluateValidityWindow(entitlement: TenantAppEntitlement, now: Date, op
 }
 
 function warnSoftClockSkew(entitlement: TenantAppEntitlement, now: Date) {
-  // eslint-disable-next-line no-console
+   
   console.warn(
     `[licensing] Using entitlement in soft grace window. tenant=${entitlement.tenant_id} app=${entitlement.app_id} entitlement=${entitlement.id} now=${now.toISOString()} valid_from=${entitlement.valid_from} valid_to=${entitlement.valid_to}`,
   );

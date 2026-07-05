@@ -4,9 +4,10 @@ import tsPlugin from "@typescript-eslint/eslint-plugin";
 
 export default [
   {
-    ignores: ["dist/**", "node_modules/**", "src/generated/**"],
+    ignores: ["core-data/**", "dist/**", "eslint.config.js", "node_modules/**", "src/generated/**"],
   },
   {
+    files: ["src/**/*.ts", "tests/**/*.ts"],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
@@ -33,13 +34,6 @@ export default [
       ],
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
       "no-console": ["warn", { allow: ["info", "warn", "error"] }],
-    },
-    settings: {
-      "import/resolver": {
-        typescript: {
-          project: "./tsconfig.json",
-        },
-      },
     },
   },
 ];

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 
 import { MANIFEST_SCHEMA_ID, validateManifest, type AppManifest } from "./manifest-validator.js";
 

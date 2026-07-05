@@ -3,8 +3,8 @@ import { z } from "zod";
 
 import { getTrustedOriginsStore, normalizeTrustedOrigin } from "../../platform/trusted-origins-store.js";
 import { NotFoundError } from "../../shared/errors.js";
-import { requireUserAuth } from "../plugins/auth-user.js";
 import { requirePlatformConfigManage } from "../guards/platform-config.js";
+import { requireUserAuth } from "../plugins/auth-user.js";
 
 const createSchema = z.object({
   origin: z.string().trim().min(1),

@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
-import { findPrivilegeDefinition, PRIVILEGE_CATALOG, tenantScopedPrivileges } from "../../access/privilege-catalog.js";
+import { PRIVILEGE_CATALOG } from "../../access/privilege-catalog.js";
 import { hasPrivilege } from "../../access/privileges.js";
-import { recordAudit } from "../../audit/audit-service.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
+import { recordAudit } from "../../audit/audit-service.js";
 import { getPool } from "../../db/pool.js";
 import { ForbiddenError, HttpError, NotFoundError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";

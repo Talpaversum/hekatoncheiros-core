@@ -1,11 +1,9 @@
 import type { FastifyRequest } from "fastify";
-
 import { jwtVerify } from "jose";
 
+import { loadPrivilegesForUser } from "../../access/privilege-evaluator.js";
 import type { EnvConfig } from "../../config/index.js";
 import type { ActorContext } from "../../platform/request-context.js";
-
-import { loadPrivilegesForUser } from "../../access/privilege-evaluator.js";
 import { UnauthorizedError } from "../../shared/errors.js";
 
 export interface UserClaims {

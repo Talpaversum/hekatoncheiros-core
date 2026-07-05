@@ -1,4 +1,5 @@
 import { getPool } from "../db/pool.js";
+
 import type { FetchManifestResult } from "./manifest-fetcher.js";
 
 type CatalogMetadata = Record<string, unknown>;

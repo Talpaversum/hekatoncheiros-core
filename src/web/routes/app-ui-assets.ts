@@ -1,6 +1,7 @@
+import type { FastifyInstance } from "fastify";
+
 import { readUiPluginArtifact } from "../../apps/ui-artifact-storage.js";
 
-import type { FastifyInstance } from "fastify";
 
 export async function registerAppUiAssetRoutes(app: FastifyInstance) {
   app.get("/apps/:slug/ui/plugin.js", async (request, reply) => {

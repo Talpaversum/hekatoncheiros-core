@@ -1,7 +1,7 @@
-import fastify from "fastify";
 import cors from "@fastify/cors";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
+import fastify from "fastify";
 
 import { loadConfig, type EnvConfig } from "./config/index.js";
 import { registerPipeline } from "./platform/pipeline.js";

@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
 
-import type { RequestContext } from "./request-context.js";
-
+import { resolveTenant } from "../tenancy/tenant-resolver.js";
 import { buildActorContext } from "../web/plugins/auth-app.js";
 import { buildUserContext } from "../web/plugins/auth-user.js";
-import { resolveTenant } from "../tenancy/tenant-resolver.js";
+
+import type { RequestContext } from "./request-context.js";
+
 
 declare module "fastify" {
   interface FastifyRequest {

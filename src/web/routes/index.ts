@@ -1,15 +1,15 @@
 import type { FastifyInstance } from "fastify";
 
-import { registerAppRoutes } from "./apps.js";
+import { registerAccountRoutes } from "./account.js";
 import { registerAppCatalogRoutes } from "./app-catalog.js";
-import { registerInstalledAppRoutes } from "./apps-installed.js";
+import { registerAppEntitlementRoutes } from "./app-entitlement.js";
 import { registerAppProxyRoutes } from "./app-proxy.js";
 import { registerAppRegistryRoutes } from "./app-registry.js";
-import { registerAppEntitlementRoutes } from "./app-entitlement.js";
 import { registerAppUiAssetRoutes } from "./app-ui-assets.js";
-import { registerAuthRoutes } from "./auth.js";
+import { registerInstalledAppRoutes } from "./apps-installed.js";
+import { registerAppRoutes } from "./apps.js";
 import { registerAuditRoutes } from "./audit.js";
-import { registerAccountRoutes } from "./account.js";
+import { registerAuthRoutes } from "./auth.js";
 import { registerConfigurationRoutes } from "./configuration.js";
 import { registerContextRoutes } from "./context.js";
 import { registerEventRoutes } from "./events.js";

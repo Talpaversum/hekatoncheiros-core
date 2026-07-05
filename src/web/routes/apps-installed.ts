@@ -185,6 +185,50 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post("/apps/installed/:app_id/check-update", async (request, reply) => {
+    const config = app.config;
+    await requireUserAuth(request, config);
+    if (!hasPrivilege(request.requestContext.privileges, "platform.apps.manage")) {
+      throw new ForbiddenError();
+    }
+
+    const appId = (request.params as { app_id: string }).app_id;
+    const store = getAppInstallationStore();
+    const installed = (await store.listInstalledApps()).find((item) => item.app_id === appId);
+    if (!installed) {
+      throw new NotFoundError("App not installed");
+    }
+
+    let fetched: Awaited<ReturnType<typeof fetchManifest>>;
+    try {
+      fetched = await fetchManifest(installed.base_url, { isTrustedOrigin });
+    } catch (error) {
+      return reply.code(400).send({ message: (error as Error).message });
+    }
+
+    const manifestAppId = fetched.manifest["app_id"];
+    if (manifestAppId !== appId) {
+      return reply.code(409).send({ message: "fetched manifest app_id does not match installed app" });
+    }
+
+    return reply.send({
+      app_id: appId,
+      checked_at: new Date().toISOString(),
+      update_available: installed.manifest_hash ? installed.manifest_hash !== fetched.manifestHash : null,
+      installed: {
+        app_version: installed.app_version ?? null,
+        manifest_hash: installed.manifest_hash ?? null,
+        fetched_at: installed.fetched_at ?? null,
+      },
+      fetched: {
+        app_version: fetched.appVersion,
+        manifest_hash: fetched.manifestHash,
+        fetched_at: fetched.fetchedAt,
+        fetched_from_url: fetched.fetchedFromUrl,
+      },
+    });
+  });
+
   app.delete("/apps/installed/:app_id", async (request, reply) => {
     const config = app.config;
     await requireUserAuth(request, config);

@@ -130,6 +130,7 @@ export async function installFetchedApp(input: InstallFetchedAppInput): Promise<
     slug,
     base_url: fetched.normalizedBaseUrl,
     app_version: fetched.appVersion,
+    manifest_hash: fetched.manifestHash,
     manifest_version: fetched.manifestVersion,
     fetched_at: fetched.fetchedAt,
     ui_url: coreHostedUiUrl,

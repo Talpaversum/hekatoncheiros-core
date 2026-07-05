@@ -239,6 +239,46 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
     return reply.code(201).send(entry);
   });
 
+  app.post("/apps/catalog/entries/:app_id/refresh-from-installed", async (request, reply) => {
+    await requireUserAuth(request, app.config);
+    requireAppCatalogManage(request);
+
+    const appId = (request.params as { app_id: string }).app_id;
+    const installed = await getAppInstallationStore().getApp(appId);
+    if (!installed) {
+      throw new NotFoundError("App not installed");
+    }
+
+    let fetched: Awaited<ReturnType<typeof fetchManifest>>;
+    try {
+      fetched = await fetchManifest(installed.base_url, { isTrustedOrigin });
+    } catch (error) {
+      return reply.code(400).send({ message: (error as Error).message });
+    }
+
+    if (fetched.manifest["app_id"] !== appId) {
+      return reply.code(409).send({ message: "fetched manifest app_id does not match installed app" });
+    }
+
+    const existing = await getAppCatalogStore().getEntry(appId);
+    const entry = await getAppCatalogStore().upsertFromManifest({
+      fetched,
+      sourceId: existing?.source_id ?? null,
+      sourceType: existing?.source_type ?? "manual",
+      trustStatus: existing?.trust_status ?? "manual",
+      authorId: existing?.author_id ?? null,
+      summary: existing?.summary ?? null,
+      metadata: existing?.metadata ?? {},
+      deployment: existing?.deployment ?? {
+        type: "external",
+        base_url: fetched.normalizedBaseUrl,
+      },
+      createdBy: request.requestContext.actor.userId,
+    });
+
+    return reply.send(entry);
+  });
+
   app.post("/apps/catalog/entries/:app_id/install", async (request, reply) => {
     await requireUserAuth(request, app.config);
     requireAppCatalogManage(request);

@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { hasPrivilege } from "../../access/privileges.js";
+import { getAppCatalogStore } from "../../apps/app-catalog-store.js";
 import { installFetchedApp } from "../../apps/app-installer.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { fetchManifest } from "../../apps/manifest-fetcher.js";
@@ -25,6 +26,14 @@ const installSchema = z.object({
   expected_manifest_hash: z.string().trim().regex(/^[a-f0-9]{64}$/i),
 });
 
+function readTime(value?: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 export async function registerInstalledAppRoutes(app: FastifyInstance) {
   const isTrustedOrigin = async (origin: string) => {
     const enabledOrigins = await getTrustedOriginsStore().listEnabledOrigins();
@@ -39,6 +48,8 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     }
     const store = getAppInstallationStore();
     const apps = await store.listInstalledApps();
+    const catalogEntries = await getAppCatalogStore().listEntries();
+    const catalogByAppId = new Map(catalogEntries.map((entry) => [entry.app_id, entry]));
     const tenantId = request.requestContext.tenant.tenantId;
 
     const items = await Promise.all(
@@ -50,6 +61,34 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
 
         return {
           ...installedApp,
+          catalog_update: catalogByAppId.has(installedApp.app_id)
+            ? (() => {
+                const entry = catalogByAppId.get(installedApp.app_id)!;
+                const hashesMatch = installedApp.manifest_hash === entry.manifest_hash;
+                const catalogFetchedAt = readTime(entry.fetched_at);
+                const installedFetchedAt = readTime(installedApp.fetched_at);
+                const isCatalogNewer =
+                  catalogFetchedAt !== null && installedFetchedAt !== null
+                    ? catalogFetchedAt > installedFetchedAt
+                    : !hashesMatch;
+                const state = !installedApp.manifest_hash
+                  ? "baseline_missing"
+                  : hashesMatch
+                    ? "same"
+                    : isCatalogNewer
+                      ? "available"
+                      : "stale";
+                return {
+                  state,
+                  update_available: state === "baseline_missing" ? null : state === "available",
+                  app_version: entry.app_version,
+                  manifest_hash: entry.manifest_hash,
+                  fetched_at: entry.fetched_at,
+                  source_type: entry.source_type,
+                  trust_status: entry.trust_status,
+                };
+              })()
+            : null,
           resolved_entitlement: selectedLicense
             ? {
                 entitlement_id: selectedLicense.jti,

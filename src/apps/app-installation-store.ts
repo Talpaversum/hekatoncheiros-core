@@ -1,6 +1,15 @@
 import { getPool } from "../db/pool.js";
 
 type NavEntry = { label: string; path: string; required_privileges?: string[] };
+type HelpEntry = {
+  title: string;
+  summary: string;
+  outcome?: string;
+  category?: string;
+  steps: string[];
+  path: string;
+  required_privileges?: string[];
+};
 
 export type InstalledApp = {
   app_id: string;
@@ -26,6 +35,7 @@ export type InstalledApp = {
           auth?: string;
         };
         nav_entries?: NavEntry[];
+        help_entries?: HelpEntry[];
       };
     };
   };

@@ -23,6 +23,26 @@ function requiresLicense(app: { manifest?: { licensing?: { required?: boolean } 
   return app.manifest?.licensing?.required === true;
 }
 
+function readHelpEntries(app: {
+  manifest?: {
+    integration?: {
+      ui?: {
+        help_entries?: Array<{
+          title: string;
+          summary: string;
+          outcome?: string;
+          category?: string;
+          steps: string[];
+          path: string;
+          required_privileges?: string[];
+        }>;
+      };
+    };
+  };
+}) {
+  return app.manifest?.integration?.ui?.help_entries ?? [];
+}
+
 export async function registerAppRegistryRoutes(app: FastifyInstance) {
   app.get("/apps/registry", async (request, reply) => {
     const config = app.config;
@@ -51,12 +71,16 @@ export async function registerAppRegistryRoutes(app: FastifyInstance) {
         const filtered = navEntries.filter((entry) =>
           hasAllPrivileges(request.requestContext.privileges, entry.required_privileges ?? []),
         );
+        const helpEntries = readHelpEntries(app).filter((entry) =>
+          hasAllPrivileges(request.requestContext.privileges, entry.required_privileges ?? []),
+        );
         return {
           app_id: app.app_id,
           app_name: readStringField(app.manifest, "app_name"),
           slug: app.slug,
           ui_url: app.ui_url,
           nav_entries: filtered,
+          help_entries: helpEntries,
         };
       });
 

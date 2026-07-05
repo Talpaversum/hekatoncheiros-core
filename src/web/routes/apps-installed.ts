@@ -142,6 +142,49 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     });
   });
 
+  app.post("/apps/installed/:app_id/refresh-artifact", async (request, reply) => {
+    const config = app.config;
+    await requireUserAuth(request, config);
+    if (!hasPrivilege(request.requestContext.privileges, "platform.apps.manage")) {
+      throw new ForbiddenError();
+    }
+
+    const appId = (request.params as { app_id: string }).app_id;
+    const store = getAppInstallationStore();
+    const installed = (await store.listInstalledApps()).find((item) => item.app_id === appId);
+    if (!installed) {
+      throw new NotFoundError("App not installed");
+    }
+
+    let fetched: Awaited<ReturnType<typeof fetchManifest>>;
+    try {
+      fetched = await fetchManifest(installed.base_url, { isTrustedOrigin });
+    } catch (error) {
+      return reply.code(400).send({ message: (error as Error).message });
+    }
+
+    const manifestAppId = fetched.manifest["app_id"];
+    if (manifestAppId !== appId) {
+      return reply.code(409).send({ message: "refreshed manifest app_id does not match installed app" });
+    }
+
+    try {
+      const result = await installFetchedApp({
+        fetched,
+        config,
+        tenantId: request.requestContext.tenant.tenantId,
+        actorUserId: request.requestContext.actor.userId,
+        effectiveUserId: request.requestContext.actor.effectiveUserId,
+      });
+      return reply.send({
+        ...result,
+        refreshed_at: new Date().toISOString(),
+      });
+    } catch (error) {
+      return reply.code(400).send({ message: (error as Error).message });
+    }
+  });
+
   app.delete("/apps/installed/:app_id", async (request, reply) => {
     const config = app.config;
     await requireUserAuth(request, config);

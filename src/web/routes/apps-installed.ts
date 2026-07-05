@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { SignJWT } from "jose";
 import { z } from "zod";
 
 import { hasPrivilege } from "../../access/privileges.js";
@@ -35,12 +36,40 @@ const updateSignalSchema = z.object({
   note: z.string().trim().max(500).optional(),
 });
 
+const APP_TOKEN_TTL_SECONDS = 60 * 15;
+
 function readTime(value?: string | null): number | null {
   if (!value) {
     return null;
   }
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : parsed;
+}
+
+function buildExpiry(secondsFromNow: number) {
+  return new Date(Date.now() + secondsFromNow * 1000);
+}
+
+async function issueAppAccessToken(params: {
+  appId: string;
+  tenantId: string;
+  config: FastifyInstance["config"];
+}) {
+  const secret = new TextEncoder().encode(params.config.JWT_SECRET);
+  const expiresAt = buildExpiry(APP_TOKEN_TTL_SECONDS);
+  const jwt = await new SignJWT({
+    app_id: params.appId,
+    tenant_id: params.tenantId,
+    purpose: "core-api",
+  })
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(params.appId)
+    .setIssuer(params.config.JWT_ISSUER)
+    .setAudience(params.config.JWT_AUDIENCE_APP)
+    .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
+    .sign(secret);
+
+  return { jwt, expiresAt };
 }
 
 async function upsertUpdateSignal(params: {
@@ -357,6 +386,42 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
         fetched_at: fetched.fetchedAt,
         fetched_from_url: fetched.fetchedFromUrl,
       },
+    });
+  });
+
+  app.post("/apps/installed/:app_id/app-token", async (request, reply) => {
+    const config = app.config;
+    await requireUserAuth(request, config);
+    if (!hasPrivilege(request.requestContext.privileges, "platform.apps.manage")) {
+      throw new ForbiddenError();
+    }
+
+    const appId = (request.params as { app_id: string }).app_id;
+    const installed = await getAppInstallationStore().getApp(appId);
+    if (!installed) {
+      throw new NotFoundError("App not installed");
+    }
+
+    const tenantId = request.requestContext.tenant.tenantId;
+    const token = await issueAppAccessToken({ appId, tenantId, config });
+
+    await recordAudit({
+      tenantId,
+      actorUserId: request.requestContext.actor.userId,
+      effectiveUserId: request.requestContext.actor.effectiveUserId,
+      action: "platform.apps.app_token.issue",
+      objectRef: appId,
+      metadata: {
+        app_id: appId,
+        expires_at: token.expiresAt.toISOString(),
+      },
+    });
+
+    return reply.send({
+      app_id: appId,
+      token_type: "Bearer",
+      access_token: token.jwt,
+      expires_at: token.expiresAt.toISOString(),
     });
   });
 

@@ -15,6 +15,7 @@ import {
 } from "../../licensing/license-service.js";
 import { getTrustedOriginsStore } from "../../platform/trusted-origins-store.js";
 import { ForbiddenError, NotFoundError } from "../../shared/errors.js";
+import { requireAppAuth } from "../plugins/auth-app.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 
 const fetchManifestSchema = z.object({
@@ -40,6 +41,57 @@ function readTime(value?: string | null): number | null {
   }
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : parsed;
+}
+
+async function upsertUpdateSignal(params: {
+  appId: string;
+  source: "app" | "feed" | "manual";
+  appVersion?: string;
+  manifestHash?: string;
+  manifestUrl?: string;
+  note?: string;
+}) {
+  const result = await getPool().query(
+    `insert into core.app_update_signals (
+       app_id,
+       source,
+       reported_app_version,
+       reported_manifest_hash,
+       reported_manifest_url,
+       note,
+       reported_at,
+       cleared_at
+     )
+     values ($1, $2, $3, $4, $5, $6, now(), null)
+     on conflict (app_id)
+     do update set
+       source = excluded.source,
+       reported_app_version = excluded.reported_app_version,
+       reported_manifest_hash = excluded.reported_manifest_hash,
+       reported_manifest_url = excluded.reported_manifest_url,
+       note = excluded.note,
+       reported_at = now(),
+       cleared_at = null
+     returning app_id, source, reported_app_version, reported_manifest_hash, reported_manifest_url, note, reported_at`,
+    [
+      params.appId,
+      params.source,
+      params.appVersion ?? null,
+      params.manifestHash ?? null,
+      params.manifestUrl ?? null,
+      params.note ?? null,
+    ],
+  );
+  const row = result.rows[0];
+  return {
+    app_id: row.app_id as string,
+    source: row.source as "app" | "feed" | "manual",
+    app_version: row.reported_app_version as string | null,
+    manifest_hash: row.reported_manifest_hash as string | null,
+    manifest_url: row.reported_manifest_url as string | null,
+    note: row.note as string | null,
+    reported_at: new Date(row.reported_at).toISOString(),
+  };
 }
 
 export async function registerInstalledAppRoutes(app: FastifyInstance) {
@@ -308,6 +360,48 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     });
   });
 
+  app.post("/apps/installed/update-signal", async (request, reply) => {
+    const config = app.config;
+    await requireAppAuth(request, config);
+
+    const appId = request.requestContext.actor.appId;
+    if (!appId) {
+      throw new ForbiddenError("App token missing app_id");
+    }
+
+    const installed = await getAppInstallationStore().getApp(appId);
+    if (!installed) {
+      throw new NotFoundError("App not installed");
+    }
+
+    const parsed = updateSignalSchema.omit({ source: true }).parse(request.body);
+    const signal = await upsertUpdateSignal({
+      appId,
+      source: "app",
+      appVersion: parsed.app_version,
+      manifestHash: parsed.manifest_hash,
+      manifestUrl: parsed.manifest_url,
+      note: parsed.note,
+    });
+
+    await recordAudit({
+      tenantId: request.requestContext.tenant.tenantId,
+      actorUserId: null,
+      effectiveUserId: null,
+      action: "platform.apps.update_signal.record",
+      objectRef: appId,
+      metadata: {
+        app_id: appId,
+        source: "app",
+        app_version: parsed.app_version ?? null,
+        manifest_hash: parsed.manifest_hash ?? null,
+        actor_app_id: appId,
+      },
+    });
+
+    return reply.send(signal);
+  });
+
   app.post("/apps/installed/:app_id/update-signal", async (request, reply) => {
     const config = app.config;
     await requireUserAuth(request, config);
@@ -322,38 +416,14 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     }
 
     const parsed = updateSignalSchema.parse(request.body);
-    const result = await getPool().query(
-      `insert into core.app_update_signals (
-         app_id,
-         source,
-         reported_app_version,
-         reported_manifest_hash,
-         reported_manifest_url,
-         note,
-         reported_at,
-         cleared_at
-       )
-       values ($1, $2, $3, $4, $5, $6, now(), null)
-       on conflict (app_id)
-       do update set
-         source = excluded.source,
-         reported_app_version = excluded.reported_app_version,
-         reported_manifest_hash = excluded.reported_manifest_hash,
-         reported_manifest_url = excluded.reported_manifest_url,
-         note = excluded.note,
-         reported_at = now(),
-         cleared_at = null
-       returning app_id, source, reported_app_version, reported_manifest_hash, reported_manifest_url, note, reported_at`,
-      [
-        appId,
-        parsed.source,
-        parsed.app_version ?? null,
-        parsed.manifest_hash ?? null,
-        parsed.manifest_url ?? null,
-        parsed.note ?? null,
-      ],
-    );
-    const row = result.rows[0];
+    const signal = await upsertUpdateSignal({
+      appId,
+      source: parsed.source,
+      appVersion: parsed.app_version,
+      manifestHash: parsed.manifest_hash,
+      manifestUrl: parsed.manifest_url,
+      note: parsed.note,
+    });
 
     await recordAudit({
       tenantId: request.requestContext.tenant.tenantId,
@@ -369,15 +439,7 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
       },
     });
 
-    return reply.send({
-      app_id: row.app_id,
-      source: row.source,
-      app_version: row.reported_app_version,
-      manifest_hash: row.reported_manifest_hash,
-      manifest_url: row.reported_manifest_url,
-      note: row.note,
-      reported_at: new Date(row.reported_at).toISOString(),
-    });
+    return reply.send(signal);
   });
 
   app.delete("/apps/installed/:app_id/update-signal", async (request, reply) => {

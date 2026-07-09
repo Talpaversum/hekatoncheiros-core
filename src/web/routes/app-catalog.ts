@@ -6,6 +6,7 @@ import { syncCatalogFeedSource } from "../../apps/app-catalog-feed-sync.js";
 import { getAppCatalogStore, type AppCatalogEntry } from "../../apps/app-catalog-store.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { installFetchedApp } from "../../apps/app-installer.js";
+import { stageAppRuntimePackage } from "../../apps/app-runtime-package-stage.js";
 import {
   assertComposeRuntimePlan,
   buildAppRuntimeDeploymentPlan,
@@ -35,6 +36,7 @@ const patchFeedSourceSchema = z.object({
 
 const installFromCatalogSchema = z.object({
   mode: z.enum(["external", "stage_only", "compose"]).default("external"),
+  stage_package: z.boolean().default(false),
 });
 
 const publishCatalogEntrySchema = z.object({
@@ -287,9 +289,40 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
     }
 
     if (parsed.mode === "stage_only") {
-      return reply.code(202).send({
-        status: "staged",
+      if (!parsed.stage_package) {
+        return reply.code(202).send({
+          status: "staged",
+          app_id: entry.app_id,
+          deployment_plan: deploymentPlan,
+        });
+      }
+
+      requireAppRuntimeManage(request);
+      try {
+        assertComposeRuntimePlan(deploymentPlan);
+        const packageStage = await stageAppRuntimePackage({
+          config: app.config,
+          plan: deploymentPlan,
+          isTrustedOrigin,
+        });
+
+        return reply.code(202).send({
+          status: "staged",
+          app_id: entry.app_id,
+          deployment_plan: deploymentPlan,
+          package_stage: packageStage,
+        });
+      } catch (error) {
+        return reply
+          .code(400)
+          .send({ message: (error as Error).message, deployment_plan: deploymentPlan });
+      }
+    }
+
+    if (parsed.stage_package) {
+      return reply.code(400).send({
         app_id: entry.app_id,
+        message: "stage_package is only supported with mode=stage_only",
         deployment_plan: deploymentPlan,
       });
     }

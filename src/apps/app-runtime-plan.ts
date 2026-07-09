@@ -8,6 +8,7 @@ export type AppRuntimeDeploymentPlan = {
   service_name: string;
   internal_base_url: string;
   package_url: string | null;
+  package_sha256: string | null;
   compose_project: string;
   compose_file: string | null;
   published_ports_allowed: false;
@@ -42,6 +43,12 @@ const relativeComposeFileSchema = z
   .min(1)
   .max(160)
   .regex(/^[a-zA-Z0-9_.-]+\.ya?ml$/);
+
+const sha256Schema = z
+  .string()
+  .trim()
+  .regex(/^[a-f0-9]{64}$/i)
+  .transform((value) => value.toLowerCase());
 
 function readString(source: CatalogDeployment, key: string): string | null {
   const value = source[key];
@@ -100,6 +107,19 @@ function parsePackageUrl(value: string | null, mode: string): string | null {
 
   parsed.hash = "";
   return parsed.toString();
+}
+
+function parseSha256(value: string | null, fieldName: string): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = sha256Schema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(`${fieldName} must be a SHA-256 hex digest`);
+  }
+
+  return parsed.data;
 }
 
 function parseInternalBaseUrl(
@@ -165,6 +185,10 @@ export function buildAppRuntimeDeploymentPlan(
   );
   const composeFile = parseComposeFile(readString(entry.deployment, "compose_file"));
   const packageUrl = parsePackageUrl(readString(entry.deployment, "package_url"), mode);
+  const packageSha256 = parseSha256(
+    readString(entry.deployment, "package_sha256"),
+    "package_sha256",
+  );
   const internalBaseUrl = parseInternalBaseUrl(
     readString(entry.deployment, "internal_base_url"),
     entry.base_url,
@@ -178,6 +202,7 @@ export function buildAppRuntimeDeploymentPlan(
     service_name: serviceName,
     internal_base_url: internalBaseUrl,
     package_url: packageUrl,
+    package_sha256: packageSha256,
     compose_project: composeProject,
     compose_file: composeFile,
     published_ports_allowed: false,

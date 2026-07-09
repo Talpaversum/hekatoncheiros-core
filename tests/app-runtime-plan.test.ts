@@ -16,6 +16,7 @@ describe("app runtime deployment plans", () => {
         service_name: "inventory",
         internal_base_url: "http://inventory:4010",
         package_url: "https://apps.example/packages/inventory-0.1.0.tar.gz",
+        package_sha256: "A".repeat(64),
         compose_project: "hekatoncheiros-core",
         compose_file: "docker-compose.app.yml",
         ports: ["4010:4010"],
@@ -29,6 +30,7 @@ describe("app runtime deployment plans", () => {
       service_name: "inventory",
       internal_base_url: "http://inventory:4010",
       package_url: "https://apps.example/packages/inventory-0.1.0.tar.gz",
+      package_sha256: "a".repeat(64),
       compose_project: "hekatoncheiros-core",
       compose_file: "docker-compose.app.yml",
       published_ports_allowed: false,
@@ -127,5 +129,22 @@ describe("app runtime deployment plans", () => {
         },
       }),
     ).toThrow("package_url must not include credentials");
+  });
+
+  it("rejects invalid package hashes", () => {
+    expect(() =>
+      buildAppRuntimeDeploymentPlan({
+        app_id: "talpaversum/inventory",
+        slug: "inventory",
+        base_url: "http://inventory:4010",
+        deployment: {
+          type: "compose",
+          service_name: "inventory",
+          internal_base_url: "http://inventory:4010",
+          package_url: "https://apps.example/inventory.tar.gz",
+          package_sha256: "not-a-sha",
+        },
+      }),
+    ).toThrow("package_sha256 must be a SHA-256 hex digest");
   });
 });

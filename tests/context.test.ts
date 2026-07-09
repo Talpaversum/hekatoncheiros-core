@@ -8,6 +8,7 @@ describe("GET /api/v1/context", () => {
     process.env["JWT_SECRET"] = "supersecretkeysupersecret";
     process.env["JWT_ISSUER"] = "hekatoncheiros-core";
     process.env["JWT_AUDIENCE_USER"] = "hc-user";
+    process.env["INSTALLER_TOKEN_SECRET"] = "installersecretinstallersecret";
     process.env["DEFAULT_TENANT_ID"] = "tnt_default";
 
     const app = await buildApp();

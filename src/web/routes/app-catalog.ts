@@ -6,11 +6,12 @@ import { syncCatalogFeedSource } from "../../apps/app-catalog-feed-sync.js";
 import { getAppCatalogStore, type AppCatalogEntry } from "../../apps/app-catalog-store.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { installFetchedApp } from "../../apps/app-installer.js";
-import { fetchManifest } from "../../apps/manifest-fetcher.js";
 import {
-  getSelectedTenantLicense,
-  hasAnyTenantLicense,
-} from "../../licensing/license-service.js";
+  assertComposeRuntimePlan,
+  buildAppRuntimeDeploymentPlan,
+} from "../../apps/app-runtime-plan.js";
+import { fetchManifest } from "../../apps/manifest-fetcher.js";
+import { getSelectedTenantLicense, hasAnyTenantLicense } from "../../licensing/license-service.js";
 import { getPlatformInstanceId } from "../../licensing/platform-instance-service.js";
 import { getTrustedOriginsStore } from "../../platform/trusted-origins-store.js";
 import { ForbiddenError, NotFoundError } from "../../shared/errors.js";
@@ -51,23 +52,6 @@ function requireAppRuntimeManage(request: { requestContext: { privileges: string
   if (!hasPrivilege(request.requestContext.privileges, "platform.apps.runtime.manage")) {
     throw new ForbiddenError();
   }
-}
-
-function buildDeploymentPlan(entry: { app_id: string; slug: string; base_url: string; deployment: Record<string, unknown> }) {
-  const type = typeof entry.deployment["type"] === "string" ? entry.deployment["type"] : "external";
-  return {
-    app_id: entry.app_id,
-    mode: type,
-    service_name: typeof entry.deployment["service_name"] === "string" ? entry.deployment["service_name"] : entry.slug,
-    internal_base_url:
-      typeof entry.deployment["internal_base_url"] === "string" ? entry.deployment["internal_base_url"] : entry.base_url,
-    compose_project:
-      typeof entry.deployment["compose_project"] === "string" ? entry.deployment["compose_project"] : "hekatoncheiros-core",
-    compose_file: typeof entry.deployment["compose_file"] === "string" ? entry.deployment["compose_file"] : null,
-    published_ports_allowed: false,
-    host_mounts_allowed: false,
-    requires_approval: true,
-  };
 }
 
 function toFeedItem(entry: AppCatalogEntry) {
@@ -119,7 +103,9 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
       getAppCatalogStore().listEntries(),
       getAppInstallationStore().listInstalledApps(),
     ]);
-    const installedByAppId = new Map(installedApps.map((installed) => [installed.app_id, installed]));
+    const installedByAppId = new Map(
+      installedApps.map((installed) => [installed.app_id, installed]),
+    );
 
     const items = await Promise.all(
       entries.map(async (entry) => {
@@ -142,7 +128,8 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
           license_state: {
             required: entry.license_required,
             has_any_license: anyLicense,
-            selected_active_license: selectedLicense?.status === "active" ? selectedLicense.jti : null,
+            selected_active_license:
+              selectedLicense?.status === "active" ? selectedLicense.jti : null,
           },
           install_payload: {
             base_url: entry.base_url,
@@ -257,7 +244,9 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
     }
 
     if (fetched.manifest["app_id"] !== appId) {
-      return reply.code(409).send({ message: "fetched manifest app_id does not match installed app" });
+      return reply
+        .code(409)
+        .send({ message: "fetched manifest app_id does not match installed app" });
     }
 
     const existing = await getAppCatalogStore().getEntry(appId);
@@ -290,7 +279,12 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
       throw new NotFoundError("Catalog entry not found");
     }
 
-    const deploymentPlan = buildDeploymentPlan(entry);
+    let deploymentPlan: ReturnType<typeof buildAppRuntimeDeploymentPlan>;
+    try {
+      deploymentPlan = buildAppRuntimeDeploymentPlan(entry);
+    } catch (error) {
+      return reply.code(400).send({ message: (error as Error).message });
+    }
 
     if (parsed.mode === "stage_only") {
       return reply.code(202).send({
@@ -302,13 +296,18 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
 
     if (parsed.mode === "compose") {
       requireAppRuntimeManage(request);
+      try {
+        assertComposeRuntimePlan(deploymentPlan);
+      } catch (error) {
+        return reply
+          .code(409)
+          .send({ message: (error as Error).message, deployment_plan: deploymentPlan });
+      }
+
       return reply.code(501).send({
         message: "Core-managed compose runtime is not implemented yet",
         code: "runtime_not_available",
-        deployment_plan: {
-          ...deploymentPlan,
-          mode: "compose",
-        },
+        deployment_plan: deploymentPlan,
       });
     }
 
@@ -320,7 +319,9 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
     }
 
     if (fetched.manifestHash !== entry.manifest_hash) {
-      return reply.code(409).send({ message: "manifest changed, refresh catalog entry before install" });
+      return reply
+        .code(409)
+        .send({ message: "manifest changed, refresh catalog entry before install" });
     }
 
     try {
@@ -358,9 +359,13 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
 
     if (parsed.published) {
       const installedApps = await getAppInstallationStore().listInstalledApps();
-      const installed = installedApps.find((appEntry) => appEntry.app_id === appId && appEntry.enabled !== false);
+      const installed = installedApps.find(
+        (appEntry) => appEntry.app_id === appId && appEntry.enabled !== false,
+      );
       if (!installed) {
-        return reply.code(409).send({ message: "Only installed and enabled apps can be published to the feed" });
+        return reply
+          .code(409)
+          .send({ message: "Only installed and enabled apps can be published to the feed" });
       }
     }
 

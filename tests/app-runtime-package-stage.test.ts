@@ -34,6 +34,7 @@ function testConfig(coreDataDir: string): EnvConfig {
     LICENSING_DCR_SIGNING_PRIVATE_JWK_JSON: "",
     LICENSING_DCR_SIGNING_PUBLIC_JWK_JSON: "",
     LICENSING_OAUTH_CALLBACK_BASE_URL: "http://127.0.0.1:3000",
+    APP_RUNTIME_DOCKER_ENABLED: false,
   };
 }
 

@@ -8,6 +8,10 @@ import { getAppInstallationStore } from "../../apps/app-installation-service.js"
 import { installFetchedApp } from "../../apps/app-installer.js";
 import { validateAppRuntimeComposePolicy } from "../../apps/app-runtime-compose-policy.js";
 import {
+  isDockerComposeRuntimeEnabled,
+  startDockerComposeAppRuntime,
+} from "../../apps/app-runtime-docker-compose.js";
+import {
   stageAppRuntimePackage,
   unpackAppRuntimePackage,
 } from "../../apps/app-runtime-package-stage.js";
@@ -352,11 +356,75 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
           .send({ message: (error as Error).message, deployment_plan: deploymentPlan });
       }
 
-      return reply.code(501).send({
-        message: "Core-managed compose runtime is not implemented yet",
-        code: "runtime_not_available",
-        deployment_plan: deploymentPlan,
-      });
+      if (!isDockerComposeRuntimeEnabled(app.config)) {
+        return reply.code(501).send({
+          message: "Docker Compose runtime is disabled",
+          code: "runtime_not_enabled",
+          deployment_plan: deploymentPlan,
+        });
+      }
+
+      try {
+        const packageStage = await stageAppRuntimePackage({
+          config: app.config,
+          plan: deploymentPlan,
+          isTrustedOrigin,
+        });
+        const packageUnpack = await unpackAppRuntimePackage({
+          config: app.config,
+          plan: deploymentPlan,
+          stage: packageStage,
+        });
+        const composePolicy = await validateAppRuntimeComposePolicy({
+          plan: deploymentPlan,
+          composeFilePath: packageUnpack.compose_file_path,
+        });
+        const composeRuntime = await startDockerComposeAppRuntime({
+          config: app.config,
+          plan: deploymentPlan,
+          composeFilePath: packageUnpack.compose_file_path,
+          workdir: packageUnpack.unpacked_dir,
+        });
+        const internalOrigin = new URL(deploymentPlan.internal_base_url).origin;
+        const fetched = await fetchManifest(deploymentPlan.internal_base_url, {
+          isTrustedOrigin: async (origin) => origin === internalOrigin || isTrustedOrigin(origin),
+        });
+
+        if (fetched.manifest["app_id"] !== entry.app_id) {
+          return reply
+            .code(409)
+            .send({ message: "started runtime manifest app_id does not match catalog entry" });
+        }
+        if (fetched.manifestHash !== entry.manifest_hash) {
+          return reply
+            .code(409)
+            .send({ message: "started runtime manifest hash does not match catalog entry" });
+        }
+
+        const result = await installFetchedApp({
+          fetched,
+          config: app.config,
+          tenantId: request.requestContext.tenant.tenantId,
+          actorUserId: request.requestContext.actor.userId,
+          effectiveUserId: request.requestContext.actor.effectiveUserId,
+        });
+
+        return reply.code(201).send({
+          ...result,
+          install_mode: "compose",
+          deployment_plan: deploymentPlan,
+          package_stage: packageStage,
+          package_unpack: packageUnpack,
+          compose_policy: composePolicy,
+          compose_runtime: composeRuntime,
+        });
+      } catch (error) {
+        const message = (error as Error).message;
+        if (message === "slug already in use") {
+          return reply.code(409).send({ message });
+        }
+        return reply.code(400).send({ message, deployment_plan: deploymentPlan });
+      }
     }
 
     let fetched: Awaited<ReturnType<typeof fetchManifest>>;

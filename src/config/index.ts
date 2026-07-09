@@ -21,6 +21,10 @@ const envSchema = z.object({
   LICENSING_DCR_SIGNING_PRIVATE_JWK_JSON: z.string().default(""),
   LICENSING_DCR_SIGNING_PUBLIC_JWK_JSON: z.string().default(""),
   LICENSING_OAUTH_CALLBACK_BASE_URL: z.string().default("http://127.0.0.1:3000"),
+  APP_RUNTIME_DOCKER_ENABLED: z
+    .string()
+    .default("false")
+    .transform((value) => value === "true" || value === "1"),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

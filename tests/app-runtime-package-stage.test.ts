@@ -2,10 +2,14 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { stageAppRuntimePackage } from "../src/apps/app-runtime-package-stage.js";
+import {
+  stageAppRuntimePackage,
+  unpackAppRuntimePackage,
+} from "../src/apps/app-runtime-package-stage.js";
 import { buildAppRuntimeDeploymentPlan } from "../src/apps/app-runtime-plan.js";
 import type { EnvConfig } from "../src/config/index.js";
 
@@ -47,6 +51,50 @@ function composePlan(overrides?: Record<string, unknown>) {
       ...overrides,
     },
   });
+}
+
+function octal(value: number, length: number): Buffer {
+  const output = Buffer.alloc(length, 0);
+  const text = value.toString(8).padStart(length - 1, "0");
+  output.write(text, 0, "ascii");
+  return output;
+}
+
+function tarEntry(name: string, content: string, typeFlag = "0"): Buffer {
+  const body = Buffer.from(content);
+  const header = Buffer.alloc(512, 0);
+  header.write(name, 0, 100, "utf8");
+  octal(0o644, 8).copy(header, 100);
+  octal(0, 8).copy(header, 108);
+  octal(0, 8).copy(header, 116);
+  octal(typeFlag === "5" ? 0 : body.length, 12).copy(header, 124);
+  octal(0, 12).copy(header, 136);
+  header.fill(" ", 148, 156);
+  header.write(typeFlag, 156, 1, "ascii");
+  header.write("ustar", 257, 5, "ascii");
+  header.write("00", 263, 2, "ascii");
+
+  let checksum = 0;
+  for (const byte of header) {
+    checksum += byte;
+  }
+  octal(checksum, 8).copy(header, 148);
+
+  if (typeFlag === "5") {
+    return header;
+  }
+
+  const padding = Buffer.alloc((512 - (body.length % 512)) % 512, 0);
+  return Buffer.concat([header, body, padding]);
+}
+
+function tarGz(entries: Array<{ name: string; content?: string; typeFlag?: string }>): Buffer {
+  return gzipSync(
+    Buffer.concat([
+      ...entries.map((entry) => tarEntry(entry.name, entry.content ?? "", entry.typeFlag ?? "0")),
+      Buffer.alloc(1024, 0),
+    ]),
+  );
 }
 
 describe("app runtime package staging", () => {
@@ -108,5 +156,79 @@ describe("app runtime package staging", () => {
         isTrustedOrigin: () => true,
       }),
     ).resolves.toMatchObject({ status: "staged" });
+  });
+
+  it("unpacks a staged package and locates the compose file", async () => {
+    const content = tarGz([
+      {
+        name: "docker-compose.app.yml",
+        content: "services:\n  inventory:\n    image: hc-app-inventory:local\n",
+      },
+      { name: "manifest/app-manifest.json", content: "{}" },
+    ]);
+    const coreDataDir = await mkdtemp(path.join(os.tmpdir(), "hc-runtime-package-"));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(content));
+
+    const plan = composePlan();
+    const stage = await stageAppRuntimePackage({
+      config: testConfig(coreDataDir),
+      plan,
+      isTrustedOrigin: () => true,
+    });
+    const unpack = await unpackAppRuntimePackage({
+      config: testConfig(coreDataDir),
+      plan,
+      stage,
+    });
+
+    expect(unpack).toMatchObject({
+      status: "unpacked",
+      app_id: "talpaversum/inventory",
+      package_sha256: stage.package_sha256,
+      files: ["docker-compose.app.yml", "manifest/app-manifest.json"],
+    });
+    await expect(readFile(unpack.compose_file_path, "utf8")).resolves.toContain("services:");
+  });
+
+  it("rejects unsafe tar paths while unpacking", async () => {
+    const content = tarGz([{ name: "../docker-compose.app.yml", content: "services: {}\n" }]);
+    const coreDataDir = await mkdtemp(path.join(os.tmpdir(), "hc-runtime-package-"));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(content));
+
+    const plan = composePlan();
+    const stage = await stageAppRuntimePackage({
+      config: testConfig(coreDataDir),
+      plan,
+      isTrustedOrigin: () => true,
+    });
+
+    await expect(
+      unpackAppRuntimePackage({
+        config: testConfig(coreDataDir),
+        plan,
+        stage,
+      }),
+    ).rejects.toThrow("Runtime package contains an unsafe path");
+  });
+
+  it("rejects packages missing the requested compose file", async () => {
+    const content = tarGz([{ name: "other.yml", content: "services: {}\n" }]);
+    const coreDataDir = await mkdtemp(path.join(os.tmpdir(), "hc-runtime-package-"));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(content));
+
+    const plan = composePlan();
+    const stage = await stageAppRuntimePackage({
+      config: testConfig(coreDataDir),
+      plan,
+      isTrustedOrigin: () => true,
+    });
+
+    await expect(
+      unpackAppRuntimePackage({
+        config: testConfig(coreDataDir),
+        plan,
+        stage,
+      }),
+    ).rejects.toThrow("Runtime package does not contain compose_file");
   });
 });

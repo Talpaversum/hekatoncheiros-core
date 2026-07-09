@@ -6,7 +6,11 @@ import { syncCatalogFeedSource } from "../../apps/app-catalog-feed-sync.js";
 import { getAppCatalogStore, type AppCatalogEntry } from "../../apps/app-catalog-store.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { installFetchedApp } from "../../apps/app-installer.js";
-import { stageAppRuntimePackage } from "../../apps/app-runtime-package-stage.js";
+import { validateAppRuntimeComposePolicy } from "../../apps/app-runtime-compose-policy.js";
+import {
+  stageAppRuntimePackage,
+  unpackAppRuntimePackage,
+} from "../../apps/app-runtime-package-stage.js";
 import {
   assertComposeRuntimePlan,
   buildAppRuntimeDeploymentPlan,
@@ -305,12 +309,23 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
           plan: deploymentPlan,
           isTrustedOrigin,
         });
+        const packageUnpack = await unpackAppRuntimePackage({
+          config: app.config,
+          plan: deploymentPlan,
+          stage: packageStage,
+        });
+        const compose_policy = await validateAppRuntimeComposePolicy({
+          plan: deploymentPlan,
+          composeFilePath: packageUnpack.compose_file_path,
+        });
 
         return reply.code(202).send({
           status: "staged",
           app_id: entry.app_id,
           deployment_plan: deploymentPlan,
           package_stage: packageStage,
+          package_unpack: packageUnpack,
+          compose_policy,
         });
       } catch (error) {
         return reply

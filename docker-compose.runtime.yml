@@ -1,0 +1,8 @@
+services:
+  core:
+    environment:
+      APP_RUNTIME_DOCKER_ENABLED: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

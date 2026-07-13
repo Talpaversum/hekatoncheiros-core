@@ -71,6 +71,18 @@ Default seeded login:
 Override ports and secrets with environment variables or a local `.env` file.
 The built-in defaults are for development only.
 
+To let Core build and start application runtime packages, use the explicit runtime
+override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.runtime.yml up -d --build
+```
+
+The override enables the Docker Compose runtime, maps `host.docker.internal` on Linux,
+and mounts the host Docker socket into Core. Access to that socket is equivalent to host
+administrator access, so only use this mode for a trusted Core installation and trusted
+application packages.
+
 ## Scripts
 
 - `npm run dev` – dev server

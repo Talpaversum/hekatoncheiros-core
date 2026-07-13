@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildDockerComposeServiceContainerListArgs,
   buildDockerComposeUpArgs,
   isDockerComposeRuntimeEnabled,
   startDockerComposeAppRuntime,
@@ -64,6 +65,24 @@ describe("Docker Compose app runtime", () => {
       "--wait-timeout",
       "60",
       "inventory",
+    ]);
+  });
+
+  it("selects only containers belonging to the planned Compose service", () => {
+    expect(
+      buildDockerComposeServiceContainerListArgs({
+        compose_project: "hekatoncheiros-core",
+        service_name: "inventory",
+      }),
+    ).toEqual([
+      "container",
+      "ls",
+      "--all",
+      "--quiet",
+      "--filter",
+      "label=com.docker.compose.project=hekatoncheiros-core",
+      "--filter",
+      "label=com.docker.compose.service=inventory",
     ]);
   });
 

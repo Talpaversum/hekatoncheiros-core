@@ -11,6 +11,7 @@ import {
   isDockerComposeRuntimeEnabled,
   startDockerComposeAppRuntime,
 } from "../../apps/app-runtime-docker-compose.js";
+import { upsertComposeAppRuntimeInstallation } from "../../apps/app-runtime-installation-store.js";
 import {
   stageAppRuntimePackage,
   unpackAppRuntimePackage,
@@ -407,6 +408,12 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
           tenantId: request.requestContext.tenant.tenantId,
           actorUserId: request.requestContext.actor.userId,
           effectiveUserId: request.requestContext.actor.effectiveUserId,
+        });
+        await upsertComposeAppRuntimeInstallation({
+          appId: entry.app_id,
+          composeProject: deploymentPlan.compose_project,
+          serviceName: deploymentPlan.service_name,
+          packageSha256: packageStage.package_sha256,
         });
 
         return reply.code(201).send({

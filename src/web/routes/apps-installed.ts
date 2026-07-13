@@ -6,6 +6,11 @@ import { hasPrivilege } from "../../access/privileges.js";
 import { getAppCatalogStore } from "../../apps/app-catalog-store.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { installFetchedApp } from "../../apps/app-installer.js";
+import {
+  isDockerComposeRuntimeEnabled,
+  removeDockerComposeAppRuntime,
+} from "../../apps/app-runtime-docker-compose.js";
+import { getAppRuntimeInstallation } from "../../apps/app-runtime-installation-store.js";
 import { fetchManifest } from "../../apps/manifest-fetcher.js";
 import { recordAudit } from "../../audit/audit-service.js";
 import { getPool } from "../../db/pool.js";
@@ -546,6 +551,41 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
 
     const appId = (request.params as { app_id: string }).app_id;
     const store = getAppInstallationStore();
+    const installed = await store.getApp(appId);
+    if (!installed) {
+      throw new NotFoundError("App not installed");
+    }
+
+    const runtimeInstallation = await getAppRuntimeInstallation(appId);
+    let runtimeRemoval: Awaited<ReturnType<typeof removeDockerComposeAppRuntime>> | null = null;
+
+    if (runtimeInstallation?.runtime_type === "compose") {
+      if (!hasPrivilege(request.requestContext.privileges, "platform.apps.runtime.manage")) {
+        throw new ForbiddenError();
+      }
+      if (!isDockerComposeRuntimeEnabled(config)) {
+        return reply.code(409).send({
+          message: "Docker Compose runtime is disabled",
+          code: "runtime_not_enabled",
+        });
+      }
+
+      try {
+        runtimeRemoval = await removeDockerComposeAppRuntime({
+          config,
+          identity: {
+            compose_project: runtimeInstallation.compose_project,
+            service_name: runtimeInstallation.service_name,
+          },
+        });
+      } catch (error) {
+        return reply.code(400).send({
+          message: (error as Error).message,
+          code: "runtime_remove_failed",
+        });
+      }
+    }
+
     const deleted = await store.uninstallApp(appId);
     const deletedCount = deleted ? 1 : 0;
 
@@ -589,6 +629,7 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
       objectRef: appId,
       metadata: {
         app_id: appId,
+        runtime_removal: runtimeRemoval,
       },
     });
 

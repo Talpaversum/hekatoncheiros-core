@@ -213,7 +213,7 @@ export class AppCatalogStore {
     const result = await pool.query(
       `insert into core.app_catalog_sources (name, source_type, feed_url, trust_mode, created_by)
        values ($1, 'feed', $2, $3, $4)
-       on conflict (feed_url)
+       on conflict (feed_url) where feed_url is not null
        do update set
          name = excluded.name,
          trust_mode = excluded.trust_mode,

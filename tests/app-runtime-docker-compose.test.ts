@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildDockerComposeUpArgs,
   isDockerComposeRuntimeEnabled,
   startDockerComposeAppRuntime,
 } from "../src/apps/app-runtime-docker-compose.js";
@@ -49,6 +50,23 @@ function composePlan() {
 }
 
 describe("Docker Compose app runtime", () => {
+  it("waits for the app service healthcheck before returning", () => {
+    expect(buildDockerComposeUpArgs(composePlan())).toEqual([
+      "compose",
+      "-p",
+      "hekatoncheiros-core",
+      "-f",
+      "docker-compose.app.yml",
+      "up",
+      "-d",
+      "--build",
+      "--wait",
+      "--wait-timeout",
+      "60",
+      "inventory",
+    ]);
+  });
+
   it("is disabled unless explicitly enabled", async () => {
     expect(isDockerComposeRuntimeEnabled(testConfig(false))).toBe(false);
     expect(isDockerComposeRuntimeEnabled(testConfig(true))).toBe(true);

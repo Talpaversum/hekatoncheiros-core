@@ -19,6 +19,28 @@ export function isDockerComposeRuntimeEnabled(config: EnvConfig): boolean {
   return config.APP_RUNTIME_DOCKER_ENABLED === true;
 }
 
+export function buildDockerComposeUpArgs(plan: AppRuntimeDeploymentPlan): string[] {
+  assertComposeRuntimePlan(plan);
+  if (!plan.compose_file) {
+    throw new Error("compose deployment requires compose_file");
+  }
+
+  return [
+    "compose",
+    "-p",
+    plan.compose_project,
+    "-f",
+    plan.compose_file,
+    "up",
+    "-d",
+    "--build",
+    "--wait",
+    "--wait-timeout",
+    "60",
+    plan.service_name,
+  ];
+}
+
 export async function startDockerComposeAppRuntime({
   config,
   plan,
@@ -36,17 +58,7 @@ export async function startDockerComposeAppRuntime({
     throw new Error("Docker Compose runtime is disabled");
   }
 
-  const args = [
-    "compose",
-    "-p",
-    plan.compose_project,
-    "-f",
-    composeFilePath,
-    "up",
-    "-d",
-    "--build",
-    plan.service_name,
-  ];
+  const args = buildDockerComposeUpArgs({ ...plan, compose_file: composeFilePath });
   const result = await execFileAsync("docker", args, {
     cwd: workdir,
     timeout: 120_000,

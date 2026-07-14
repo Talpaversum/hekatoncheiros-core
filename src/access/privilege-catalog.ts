@@ -27,6 +27,12 @@ export const PRIVILEGE_CATALOG: PrivilegeDefinition[] = [
     scope: "platform",
   },
   {
+    id: "platform.authors.manage",
+    label: "Manage application authors",
+    description: "Onboard authors and manage their registry-backed public signing keys.",
+    scope: "platform",
+  },
+  {
     id: "tenant.config.manage",
     label: "Manage tenant configuration",
     description: "Update tenant details and manage tenant-local configuration.",

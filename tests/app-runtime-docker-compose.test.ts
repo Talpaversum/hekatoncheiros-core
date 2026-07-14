@@ -35,6 +35,8 @@ function testConfig(enabled: boolean): EnvConfig {
     APP_RUNTIME_DOCKER_ENABLED: enabled,
     APP_CATALOG_AUTO_REFRESH_ENABLED: false,
     APP_CATALOG_AUTO_REFRESH_INTERVAL_SECONDS: 300,
+    AUTHOR_REGISTRY_URL: "",
+    AUTHOR_REGISTRY_ADMIN_TOKEN: "",
   };
 }
 

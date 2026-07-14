@@ -10,6 +10,7 @@ import { registerInstalledAppRoutes } from "./apps-installed.js";
 import { registerAppRoutes } from "./apps.js";
 import { registerAuditRoutes } from "./audit.js";
 import { registerAuthRoutes } from "./auth.js";
+import { registerAuthorRoutes } from "./authors.js";
 import { registerConfigurationRoutes } from "./configuration.js";
 import { registerContextRoutes } from "./context.js";
 import { registerEventRoutes } from "./events.js";
@@ -36,4 +37,5 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerAppProxyRoutes(app);
   await registerEventRoutes(app);
   await registerAuditRoutes(app);
+  await registerAuthorRoutes(app);
 }

@@ -30,6 +30,8 @@ const envSchema = z.object({
     .default("false")
     .transform((value) => value === "true" || value === "1"),
   APP_CATALOG_AUTO_REFRESH_INTERVAL_SECONDS: z.coerce.number().int().min(60).default(300),
+  AUTHOR_REGISTRY_URL: z.string().default(""),
+  AUTHOR_REGISTRY_ADMIN_TOKEN: z.string().default(""),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

@@ -102,6 +102,13 @@ to `/run/secrets/hc_core_app_token`, and must read the token from that file when
 a Core API request. Administrators can rotate the mounted token without copying its value:
 `POST /api/v1/apps/installed/:app_id/runtime/token/rotate`.
 
+Optional author onboarding through the private `hc-author-registry` requires
+`AUTHOR_REGISTRY_URL` and `AUTHOR_REGISTRY_ADMIN_TOKEN`. Users with
+`platform.authors.manage` can onboard authors, rotate their public JWKS and
+certificates, and synchronize the registry's public trust snapshot through the
+`/api/v1/platform/authors*` and `/api/v1/platform/author-registry/*` routes.
+Author private keys must never be sent to Core.
+
 ## Scripts
 
 - `npm run dev` – dev server

@@ -6,6 +6,11 @@ import { syncCatalogFeedSource } from "../../apps/app-catalog-feed-sync.js";
 import { getAppCatalogStore, type AppCatalogEntry } from "../../apps/app-catalog-store.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { installFetchedApp } from "../../apps/app-installer.js";
+import {
+  AppRuntimeApprovalError,
+  assertAppRuntimeStartApproval,
+  recordAppRuntimeStartApproval,
+} from "../../apps/app-runtime-approval.js";
 import { validateAppRuntimeComposePolicy } from "../../apps/app-runtime-compose-policy.js";
 import {
   isDockerComposeRuntimeEnabled,
@@ -46,6 +51,20 @@ const patchFeedSourceSchema = z.object({
 const installFromCatalogSchema = z.object({
   mode: z.enum(["external", "stage_only", "compose"]).default("external"),
   stage_package: z.boolean().default(false),
+  approval: z
+    .object({
+      confirmed: z.literal(true),
+      expected_manifest_sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+      expected_package_sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+      expected_deployment: z.object({
+        service_name: z.string().min(1),
+        internal_base_url: z.string().url(),
+        package_url: z.string().url(),
+        compose_project: z.string().min(1),
+        compose_file: z.string().min(1),
+      }),
+    })
+    .optional(),
 });
 
 const publishCatalogEntrySchema = z.object({
@@ -364,6 +383,34 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
           deployment_plan: deploymentPlan,
         });
       }
+
+      try {
+        assertAppRuntimeStartApproval({
+          approval: parsed.approval,
+          manifestSha256: entry.manifest_hash,
+          plan: deploymentPlan,
+        });
+      } catch (error) {
+        if (error instanceof AppRuntimeApprovalError) {
+          return reply.code(409).send({
+            message: error.message,
+            code: error.code,
+            deployment_plan: deploymentPlan,
+          });
+        }
+        throw error;
+      }
+
+      await recordAppRuntimeStartApproval({
+        tenantId: request.requestContext.tenant.tenantId,
+        actorUserId: request.requestContext.actor.userId,
+        effectiveUserId: request.requestContext.actor.effectiveUserId,
+        appVersion: entry.app_version,
+        sourceType: entry.source_type,
+        trustStatus: entry.trust_status,
+        manifestSha256: entry.manifest_hash,
+        plan: deploymentPlan,
+      });
 
       try {
         const packageStage = await stageAppRuntimePackage({

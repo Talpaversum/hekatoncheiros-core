@@ -5,12 +5,14 @@ import { z } from "zod";
 
 import { recordAudit } from "../../audit/audit-service.js";
 import { getPool } from "../../db/pool.js";
+import { PLATFORM_LOCALES } from "../../localization/contract.js";
 import { ForbiddenError, NotFoundError, UnauthorizedError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 
 const patchAccountSchema = z.object({
   display_name: z.string().trim().max(160).optional().nullable(),
   email: z.string().trim().email().optional(),
+  preferred_locale: z.enum(PLATFORM_LOCALES).optional(),
 });
 
 const passwordSchema = z.object({
@@ -28,6 +30,7 @@ function mapUser(row: Record<string, unknown>) {
     email: String(row["email"]),
     display_name: (row["display_name"] as string | null) ?? null,
     status: String(row["status"]),
+    preferred_locale: String(row["preferred_locale"] ?? "en"),
     created_at: new Date(String(row["created_at"])).toISOString(),
     updated_at: new Date(String(row["updated_at"] ?? row["created_at"])).toISOString(),
   };
@@ -39,7 +42,7 @@ export async function registerAccountRoutes(app: FastifyInstance) {
 
     const pool = getPool();
     const result = await pool.query(
-      "select id, email, display_name, status, created_at, updated_at from core.users where id = $1",
+      "select id, email, display_name, status, preferred_locale, created_at, updated_at from core.users where id = $1",
       [request.requestContext.actor.userId],
     );
 
@@ -69,14 +72,16 @@ export async function registerAccountRoutes(app: FastifyInstance) {
       `update core.users
           set email = coalesce($2, email),
               display_name = case when $3 then $4 else display_name end,
+              preferred_locale = coalesce($5, preferred_locale),
               updated_at = now()
         where id = $1
-        returning id, email, display_name, status, created_at, updated_at`,
+        returning id, email, display_name, status, preferred_locale, created_at, updated_at`,
       [
         request.requestContext.actor.userId,
         parsed.email ?? null,
         Object.prototype.hasOwnProperty.call(parsed, "display_name"),
         parsed.display_name ?? null,
+        parsed.preferred_locale ?? null,
       ],
     );
 

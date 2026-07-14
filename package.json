@@ -14,7 +14,8 @@
     "test:watch": "vitest",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts",
-    "codegen:openapi": "openapi-typescript docs/api/openapi.yml -o src/generated/openapi/schema.d.ts"
+    "codegen:openapi": "openapi-typescript docs/api/openapi.yml -o src/generated/openapi/schema.d.ts",
+    "validate:localization": "node scripts/validate-localization.mjs"
   },
   "repository": {
     "type": "git",

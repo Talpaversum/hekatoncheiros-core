@@ -79,6 +79,12 @@ export async function registerAppRegistryRoutes(app: FastifyInstance) {
           app_name: readStringField(app.manifest, "app_name"),
           slug: app.slug,
           ui_url: app.ui_url,
+          localization: app.manifest.localization ?? {
+            contract_version: 1,
+            default_locale: "en",
+            supported_locales: ["en"],
+            resources: [],
+          },
           nav_entries: filtered,
           help_entries: helpEntries,
         };

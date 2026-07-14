@@ -53,6 +53,44 @@ function validateReservedRequiredPrivileges(node: unknown): void {
   }
 }
 
+function validateLocalizationMetadata(manifest: AppManifest): void {
+  const localization = manifest["localization"] as
+    | {
+        supported_locales?: unknown;
+        resources?: unknown;
+      }
+    | undefined;
+  const supported = Array.isArray(localization?.supported_locales)
+    ? localization.supported_locales.filter((item): item is string => typeof item === "string")
+    : [];
+  const resources = Array.isArray(localization?.resources)
+    ? localization.resources.filter(
+        (item): item is { locale: string; path: string } =>
+          Boolean(item) && typeof item === "object" && typeof item.locale === "string" && typeof item.path === "string",
+      )
+    : [];
+  const resourceLocales = new Set<string>();
+  const resourcePaths = new Set<string>();
+  for (const resource of resources) {
+    if (resourceLocales.has(resource.locale)) {
+      throw new Error(`Localization resource locale is duplicated: ${resource.locale}`);
+    }
+    if (resourcePaths.has(resource.path)) {
+      throw new Error(`Localization resource path is duplicated: ${resource.path}`);
+    }
+    if (!supported.includes(resource.locale)) {
+      throw new Error(`Localization resource locale is not declared as supported: ${resource.locale}`);
+    }
+    resourceLocales.add(resource.locale);
+    resourcePaths.add(resource.path);
+  }
+  for (const locale of supported) {
+    if (!resourceLocales.has(locale)) {
+      throw new Error(`Localization resource is missing for supported locale: ${locale}`);
+    }
+  }
+}
+
 function findRepoRoot(startDir: string): string {
   let currentDir = startDir;
 
@@ -95,4 +133,5 @@ export async function validateManifest(manifest: AppManifest): Promise<void> {
   }
 
   validateReservedRequiredPrivileges(manifest);
+  validateLocalizationMetadata(manifest);
 }

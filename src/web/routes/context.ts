@@ -16,12 +16,12 @@ export async function registerContextRoutes(app: FastifyInstance) {
     const privileges = await loadPrivilegesForUser(actor.userId, tenantId);
     request.requestContext.privileges = privileges;
     const [userResult, tenantResult] = await Promise.all([
-      pool.query("select email, display_name, status from core.users where id = $1", [actor.userId]),
+      pool.query("select email, display_name, status, preferred_locale from core.users where id = $1", [actor.userId]),
       tenantId
         ? pool.query("select name, primary_domain, status from core.tenants where id = $1", [tenantId])
         : Promise.resolve({ rows: [], rowCount: 0 }),
     ]);
-    const user = userResult.rows[0] as { email?: string; display_name?: string | null; status?: string } | undefined;
+    const user = userResult.rows[0] as { email?: string; display_name?: string | null; status?: string; preferred_locale?: string } | undefined;
     const tenant = tenantResult.rows[0] as { name?: string; primary_domain?: string | null; status?: string } | undefined;
 
     return reply.send({
@@ -37,6 +37,7 @@ export async function registerContextRoutes(app: FastifyInstance) {
         email: user?.email ?? null,
         display_name: user?.display_name ?? null,
         status: user?.status ?? null,
+        preferred_locale: user?.preferred_locale ?? "en",
         effective_user_id: actor.effectiveUserId,
         impersonating: actor.impersonating,
         delegation: actor.delegation,

@@ -26,6 +26,12 @@ export type InstalledApp = {
   nav_entries?: NavEntry[];
   enabled?: boolean;
   manifest: {
+    localization?: {
+      contract_version?: number;
+      default_locale?: string;
+      supported_locales?: string[];
+      resources?: Array<{ locale: string; path: string; format: string }>;
+    };
     licensing?: {
       required?: boolean;
     };

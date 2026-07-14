@@ -40,6 +40,12 @@ function buildMinimalManifest(requiredPrivileges: string[]) {
         api_read_only: false,
       },
     },
+    localization: {
+      contract_version: 1,
+      default_locale: "en",
+      supported_locales: ["en"],
+      resources: [{ locale: "en", path: "locales/en.json", format: "hc-flat-json-v1" }],
+    },
     integration: {
       slug: "inventory-core",
       api: {

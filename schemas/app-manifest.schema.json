@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://hekatoncheiros.local/schemas/app-manifest.schema.json",
   "type": "object",
-  "required": ["app_id", "app_name", "version", "vendor", "tenancy", "data", "privileges", "licensing", "integration"],
+  "required": ["app_id", "app_name", "version", "vendor", "tenancy", "data", "privileges", "licensing", "localization", "integration"],
   "additionalProperties": false,
   "properties": {
     "app_id": { "type": "string", "pattern": "^[a-z0-9-_.]+/[a-z0-9-_.]+$" },
@@ -154,6 +154,39 @@
             }
           },
           "default": {}
+        }
+      }
+    },
+    "localization": {
+      "type": "object",
+      "required": ["contract_version", "default_locale", "supported_locales", "resources"],
+      "additionalProperties": false,
+      "properties": {
+        "contract_version": { "const": 1 },
+        "default_locale": { "const": "en" },
+        "supported_locales": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "contains": { "const": "en" },
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+          }
+        },
+        "resources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["locale", "path", "format"],
+            "additionalProperties": false,
+            "properties": {
+              "locale": { "type": "string", "pattern": "^[a-z]{2}(-[A-Z]{2})?$" },
+              "path": { "type": "string", "pattern": "^locales/[A-Za-z0-9_-]+\\.json$" },
+              "format": { "const": "hc-flat-json-v1" }
+            }
+          }
         }
       }
     },

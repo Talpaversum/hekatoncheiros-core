@@ -83,6 +83,19 @@ and mounts the host Docker socket into Core. Access to that socket is equivalent
 administrator access, so only use this mode for a trusted Core installation and trusted
 application packages.
 
+For optional HTTPS termination, place `tls.crt` and `tls.key` in an untracked
+certificate directory and start the ingress override:
+
+```bash
+HTTPS_SERVER_NAME=hc.example.com HTTPS_CERT_DIR=/secure/hc-certs \
+  docker compose -f docker-compose.yml -f docker-compose.https.yml up -d --build
+```
+
+HTTPS is exposed on `${HTTPS_PUBLISHED_PORT:-8443}` and the HTTP redirect on
+`${HTTP_REDIRECT_PUBLISHED_PORT:-8081}`. In production, bind the direct Core,
+web, and PostgreSQL published ports to loopback or block them at the host
+firewall so clients cannot bypass the HTTPS ingress.
+
 Core-managed applications receive their short-lived Core API token as a Compose secret,
 not as an environment value. The runtime gets `HC_CORE_APP_TOKEN_FILE`, currently pointing
 to `/run/secrets/hc_core_app_token`, and must read the token from that file whenever it makes

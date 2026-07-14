@@ -1,0 +1,22 @@
+services:
+  ingress:
+    image: nginx:1.27-alpine
+    environment:
+      HTTPS_SERVER_NAME: ${HTTPS_SERVER_NAME:-localhost}
+      NGINX_ENVSUBST_FILTER: ^HTTPS_SERVER_NAME$
+    depends_on:
+      core:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    ports:
+      - "${HTTPS_PUBLISHED_PORT:-8443}:443"
+      - "${HTTP_REDIRECT_PUBLISHED_PORT:-8081}:80"
+    volumes:
+      - ./deploy/nginx/https.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ${HTTPS_CERT_DIR:-./certs}:/etc/nginx/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://127.0.0.1/ >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12

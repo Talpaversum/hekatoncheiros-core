@@ -56,9 +56,14 @@ const createFeedSourceSchema = z.object({
   trust_mode: z.enum(["dev", "manual", "verified", "official"]).default("manual"),
 });
 
-const patchFeedSourceSchema = z.object({
-  is_enabled: z.boolean(),
-});
+const patchFeedSourceSchema = z
+  .object({
+    is_enabled: z.boolean().optional(),
+    auto_refresh_enabled: z.boolean().optional(),
+  })
+  .refine((value) => value.is_enabled !== undefined || value.auto_refresh_enabled !== undefined, {
+    message: "At least one source setting is required",
+  });
 
 const installFromCatalogSchema = z.object({
   mode: z.enum(["external", "stage_only", "compose"]).default("external"),
@@ -224,12 +229,27 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
 
     const id = (request.params as { id: string }).id;
     const parsed = patchFeedSourceSchema.parse(request.body);
-    const source = await getAppCatalogStore().setSourceEnabled(id, parsed.is_enabled);
-    if (!source) {
-      throw new NotFoundError("Catalog source not found");
+    try {
+      let source = await getAppCatalogStore().getSource(id);
+      if (!source) {
+        throw new NotFoundError("Catalog source not found");
+      }
+      if (parsed.auto_refresh_enabled !== undefined) {
+        source = await getAppCatalogStore().setSourceAutoRefresh(
+          id,
+          parsed.auto_refresh_enabled,
+        );
+      }
+      if (parsed.is_enabled !== undefined) {
+        source = await getAppCatalogStore().setSourceEnabled(id, parsed.is_enabled);
+      }
+      return reply.send(source);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw error;
+      }
+      return reply.code(400).send({ message: (error as Error).message });
     }
-
-    return reply.send(source);
   });
 
   app.post("/apps/catalog/sources/:id/sync", async (request, reply) => {

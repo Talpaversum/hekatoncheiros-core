@@ -25,6 +25,11 @@ const envSchema = z.object({
     .string()
     .default("false")
     .transform((value) => value === "true" || value === "1"),
+  APP_CATALOG_AUTO_REFRESH_ENABLED: z
+    .string()
+    .default("false")
+    .transform((value) => value === "true" || value === "1"),
+  APP_CATALOG_AUTO_REFRESH_INTERVAL_SECONDS: z.coerce.number().int().min(60).default(300),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

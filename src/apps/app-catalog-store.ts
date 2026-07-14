@@ -12,6 +12,7 @@ export type AppCatalogSource = {
   feed_url: string | null;
   trust_mode: "dev" | "manual" | "verified" | "official";
   is_enabled: boolean;
+  auto_refresh_enabled: boolean;
   last_sync_at: string | null;
   last_error: string | null;
   created_by: string | null;
@@ -158,6 +159,7 @@ function mapSourceRow(row: Record<string, unknown>): AppCatalogSource {
     feed_url: (row["feed_url"] as string | null) ?? null,
     trust_mode: String(row["trust_mode"]) as AppCatalogSource["trust_mode"],
     is_enabled: Boolean(row["is_enabled"]),
+    auto_refresh_enabled: Boolean(row["auto_refresh_enabled"]),
     last_sync_at: row["last_sync_at"] ? new Date(String(row["last_sync_at"])).toISOString() : null,
     last_error: (row["last_error"] as string | null) ?? null,
     created_by: (row["created_by"] as string | null) ?? null,
@@ -185,7 +187,7 @@ export class AppCatalogStore {
   async listSources(): Promise<AppCatalogSource[]> {
     const pool = getPool();
     const result = await pool.query(
-      `select id, name, source_type, feed_url, trust_mode, is_enabled, last_sync_at, last_error,
+      `select id, name, source_type, feed_url, trust_mode, is_enabled, auto_refresh_enabled, last_sync_at, last_error,
               created_by, created_at, updated_at
          from core.app_catalog_sources
         order by created_at desc`,
@@ -197,7 +199,7 @@ export class AppCatalogStore {
   async getSource(id: string): Promise<AppCatalogSource | null> {
     const pool = getPool();
     const result = await pool.query(
-      `select id, name, source_type, feed_url, trust_mode, is_enabled, last_sync_at, last_error,
+      `select id, name, source_type, feed_url, trust_mode, is_enabled, auto_refresh_enabled, last_sync_at, last_error,
               created_by, created_at, updated_at
          from core.app_catalog_sources
         where id = $1`,
@@ -219,7 +221,7 @@ export class AppCatalogStore {
          trust_mode = excluded.trust_mode,
          is_enabled = true,
          updated_at = now()
-       returning id, name, source_type, feed_url, trust_mode, is_enabled, last_sync_at, last_error,
+       returning id, name, source_type, feed_url, trust_mode, is_enabled, auto_refresh_enabled, last_sync_at, last_error,
                  created_by, created_at, updated_at`,
       [input.name.trim(), feedUrl, input.trustMode ?? "manual", input.createdBy ?? null],
     );
@@ -234,11 +236,32 @@ export class AppCatalogStore {
           set is_enabled = $2,
               updated_at = now()
         where id = $1
-        returning id, name, source_type, feed_url, trust_mode, is_enabled, last_sync_at, last_error,
+        returning id, name, source_type, feed_url, trust_mode, is_enabled, auto_refresh_enabled, last_sync_at, last_error,
                   created_by, created_at, updated_at`,
       [id, isEnabled],
     );
 
+    return result.rowCount ? mapSourceRow(result.rows[0]) : null;
+  }
+
+  async setSourceAutoRefresh(id: string, enabled: boolean): Promise<AppCatalogSource | null> {
+    const existing = await this.getSource(id);
+    if (!existing) {
+      return null;
+    }
+    if (enabled && existing.trust_mode !== "verified" && existing.trust_mode !== "official") {
+      throw new Error("Automatic refresh is only allowed for verified or official sources");
+    }
+
+    const result = await getPool().query(
+      `update core.app_catalog_sources
+          set auto_refresh_enabled = $2,
+              updated_at = now()
+        where id = $1
+        returning id, name, source_type, feed_url, trust_mode, is_enabled, auto_refresh_enabled,
+                  last_sync_at, last_error, created_by, created_at, updated_at`,
+      [id, enabled],
+    );
     return result.rowCount ? mapSourceRow(result.rows[0]) : null;
   }
 

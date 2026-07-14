@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { isAutoRefreshEligible } from "../src/apps/app-catalog-auto-refresh.js";
+import {
+  assertAutomaticRefreshPolicy,
+  CATALOG_ONLY_AUTO_REFRESH_EFFECTS,
+  isAutoRefreshEligible,
+} from "../src/apps/app-catalog-auto-refresh.js";
 import type { AppCatalogSource } from "../src/apps/app-catalog-store.js";
 
 function source(overrides: Partial<AppCatalogSource>): AppCatalogSource {
@@ -28,5 +32,24 @@ describe("catalog automatic refresh policy", () => {
     expect(isAutoRefreshEligible(source({ trust_mode: "manual" }))).toBe(false);
     expect(isAutoRefreshEligible(source({ auto_refresh_enabled: false }))).toBe(false);
     expect(isAutoRefreshEligible(source({ is_enabled: false }))).toBe(false);
+  });
+
+  it("allows catalog-only effects and rejects automatic UI or runtime mutation", () => {
+    const eligible = source({});
+    expect(() =>
+      assertAutomaticRefreshPolicy(eligible, CATALOG_ONLY_AUTO_REFRESH_EFFECTS),
+    ).not.toThrow();
+    expect(() =>
+      assertAutomaticRefreshPolicy(eligible, {
+        ...CATALOG_ONLY_AUTO_REFRESH_EFFECTS,
+        installed_ui_artifact: true,
+      }),
+    ).toThrow("must not change installed UI artifacts");
+    expect(() =>
+      assertAutomaticRefreshPolicy(eligible, {
+        ...CATALOG_ONLY_AUTO_REFRESH_EFFECTS,
+        runtime: true,
+      }),
+    ).toThrow("must not change installed UI artifacts");
   });
 });

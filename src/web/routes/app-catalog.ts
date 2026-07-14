@@ -239,6 +239,18 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
           id,
           parsed.auto_refresh_enabled,
         );
+        await recordAudit({
+          tenantId: request.requestContext.tenant.tenantId,
+          actorUserId: request.requestContext.actor.userId,
+          effectiveUserId: request.requestContext.actor.effectiveUserId,
+          action: "platform.apps.catalog.auto_refresh.configure",
+          objectRef: id,
+          metadata: {
+            source_id: id,
+            auto_refresh_enabled: parsed.auto_refresh_enabled,
+            trust_mode: source?.trust_mode ?? null,
+          },
+        });
       }
       if (parsed.is_enabled !== undefined) {
         source = await getAppCatalogStore().setSourceEnabled(id, parsed.is_enabled);

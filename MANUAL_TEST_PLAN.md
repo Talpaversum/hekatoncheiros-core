@@ -12,7 +12,7 @@
 1. Open **Manage Apps**.
 2. Click **Uninstall** on an installed app.
 3. In wizard step **Confirm**, verify app name + base URL are shown.
-4. Verify confirm button is disabled until checkbox **Rozumím dopadu odinstalace** is checked.
+4. Verify the confirm button is disabled until the impact acknowledgment checkbox is checked.
 5. Confirm uninstall.
 6. Verify wizard switches to **Running** (spinner, cannot close via ESC/backdrop).
 7. Verify app disappears from table immediately (optimistic update).

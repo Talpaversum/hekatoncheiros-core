@@ -203,7 +203,7 @@ async function fetchManifestAtUrl(url: URL, options: FetchExecutionOptions): Pro
   }
 
   if (response.status >= 300 && response.status < 400) {
-    throw new Error("Redirect není podporován, použij cílovou URL přímo");
+    throw new Error("Redirects are not supported; use the target URL directly");
   }
 
   if (response.status === 404) {

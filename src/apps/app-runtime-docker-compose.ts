@@ -1,10 +1,15 @@
 import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 
 import type { EnvConfig } from "../config/index.js";
 
 import type { AppRuntimeDeploymentPlan } from "./app-runtime-plan.js";
 import { assertComposeRuntimePlan } from "./app-runtime-plan.js";
+import {
+  APP_RUNTIME_TOKEN_CONTAINER_PATH,
+  APP_RUNTIME_TOKEN_SECRET_NAME,
+} from "./app-runtime-token.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -34,18 +39,25 @@ export function isDockerComposeRuntimeEnabled(config: EnvConfig): boolean {
   return config.APP_RUNTIME_DOCKER_ENABLED === true;
 }
 
-export function buildDockerComposeUpArgs(plan: AppRuntimeDeploymentPlan): string[] {
+export function buildDockerComposeUpArgs(
+  plan: AppRuntimeDeploymentPlan,
+  composeOverrideFilePath?: string,
+): string[] {
   assertComposeRuntimePlan(plan);
   if (!plan.compose_file) {
     throw new Error("compose deployment requires compose_file");
+  }
+
+  const composeFiles = ["-f", plan.compose_file];
+  if (composeOverrideFilePath) {
+    composeFiles.push("-f", composeOverrideFilePath);
   }
 
   return [
     "compose",
     "-p",
     plan.compose_project,
-    "-f",
-    plan.compose_file,
+    ...composeFiles,
     "up",
     "-d",
     "--build",
@@ -54,6 +66,27 @@ export function buildDockerComposeUpArgs(plan: AppRuntimeDeploymentPlan): string
     "60",
     plan.service_name,
   ];
+}
+
+export async function writeDockerComposeTokenOverride(params: {
+  serviceName: string;
+  tokenFilePath: string;
+  overrideFilePath: string;
+}): Promise<string> {
+  const override = {
+    services: {
+      [params.serviceName]: {
+        environment: { HC_CORE_APP_TOKEN_FILE: APP_RUNTIME_TOKEN_CONTAINER_PATH },
+        secrets: [{ source: APP_RUNTIME_TOKEN_SECRET_NAME, target: APP_RUNTIME_TOKEN_SECRET_NAME }],
+      },
+    },
+    secrets: { [APP_RUNTIME_TOKEN_SECRET_NAME]: { file: params.tokenFilePath } },
+  };
+  await writeFile(params.overrideFilePath, `${JSON.stringify(override, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  return params.overrideFilePath;
 }
 
 export function buildDockerComposeServiceContainerListArgs(
@@ -75,11 +108,13 @@ export async function startDockerComposeAppRuntime({
   config,
   plan,
   composeFilePath,
+  composeOverrideFilePath,
   workdir,
 }: {
   config: EnvConfig;
   plan: AppRuntimeDeploymentPlan;
   composeFilePath: string;
+  composeOverrideFilePath?: string;
   workdir: string;
 }): Promise<DockerComposeRuntimeResult> {
   assertComposeRuntimePlan(plan);
@@ -88,7 +123,10 @@ export async function startDockerComposeAppRuntime({
     throw new Error("Docker Compose runtime is disabled");
   }
 
-  const args = buildDockerComposeUpArgs({ ...plan, compose_file: composeFilePath });
+  const args = buildDockerComposeUpArgs(
+    { ...plan, compose_file: composeFilePath },
+    composeOverrideFilePath,
+  );
   const result = await execFileAsync("docker", args, {
     cwd: workdir,
     timeout: 120_000,

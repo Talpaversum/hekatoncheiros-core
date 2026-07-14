@@ -83,6 +83,12 @@ and mounts the host Docker socket into Core. Access to that socket is equivalent
 administrator access, so only use this mode for a trusted Core installation and trusted
 application packages.
 
+Core-managed applications receive their short-lived Core API token as a Compose secret,
+not as an environment value. The runtime gets `HC_CORE_APP_TOKEN_FILE`, currently pointing
+to `/run/secrets/hc_core_app_token`, and must read the token from that file whenever it makes
+a Core API request. Administrators can rotate the mounted token without copying its value:
+`POST /api/v1/apps/installed/:app_id/runtime/token/rotate`.
+
 ## Scripts
 
 - `npm run dev` – dev server

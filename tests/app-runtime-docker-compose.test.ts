@@ -6,6 +6,7 @@ import {
   isDockerComposeRuntimeEnabled,
   startDockerComposeAppRuntime,
   stopDockerComposeAppRuntime,
+  writeDockerComposeTokenOverride,
 } from "../src/apps/app-runtime-docker-compose.js";
 import { buildAppRuntimeDeploymentPlan } from "../src/apps/app-runtime-plan.js";
 import type { EnvConfig } from "../src/config/index.js";
@@ -52,6 +53,19 @@ function composePlan() {
 }
 
 describe("Docker Compose app runtime", () => {
+  it("adds the Core-controlled token override after the package compose file", () => {
+    expect(buildDockerComposeUpArgs(composePlan(), "/runtime/compose.core-runtime.json").slice(0, 7)).toEqual([
+      "compose",
+      "-p",
+      "hekatoncheiros-core",
+      "-f",
+      "docker-compose.app.yml",
+      "-f",
+      "/runtime/compose.core-runtime.json",
+    ]);
+    expect(writeDockerComposeTokenOverride).toBeTypeOf("function");
+  });
+
   it("waits for the app service healthcheck before returning", () => {
     expect(buildDockerComposeUpArgs(composePlan())).toEqual([
       "compose",

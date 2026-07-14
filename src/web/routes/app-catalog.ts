@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import type { FastifyInstance, RouteHandlerMethod } from "fastify";
 import { z } from "zod";
 
@@ -15,6 +17,7 @@ import { validateAppRuntimeComposePolicy } from "../../apps/app-runtime-compose-
 import {
   isDockerComposeRuntimeEnabled,
   startDockerComposeAppRuntime,
+  writeDockerComposeTokenOverride,
 } from "../../apps/app-runtime-docker-compose.js";
 import {
   getAppRuntimeInstallation,
@@ -28,6 +31,11 @@ import {
   assertComposeRuntimePlan,
   buildAppRuntimeDeploymentPlan,
 } from "../../apps/app-runtime-plan.js";
+import {
+  APP_RUNTIME_TOKEN_CONTAINER_PATH,
+  deliverAppRuntimeToken,
+  issueAppRuntimeToken,
+} from "../../apps/app-runtime-token.js";
 import { fetchManifest } from "../../apps/manifest-fetcher.js";
 import { recordAudit } from "../../audit/audit-service.js";
 import { getSelectedTenantLicense, hasAnyTenantLicense } from "../../licensing/license-service.js";
@@ -449,10 +457,26 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
           plan: deploymentPlan,
           composeFilePath: packageUnpack.compose_file_path,
         });
+        const runtimeToken = await issueAppRuntimeToken({
+          appId: entry.app_id,
+          tenantId: request.requestContext.tenant.tenantId,
+          config: app.config,
+        });
+        const tokenDelivery = await deliverAppRuntimeToken({
+          appId: entry.app_id,
+          token: runtimeToken.jwt,
+          config: app.config,
+        });
+        const composeOverrideFilePath = await writeDockerComposeTokenOverride({
+          serviceName: deploymentPlan.service_name,
+          tokenFilePath: tokenDelivery.token_file_path,
+          overrideFilePath: path.join(packageUnpack.unpacked_dir, "compose.core-runtime.json"),
+        });
         const composeRuntime = await startDockerComposeAppRuntime({
           config: app.config,
           plan: deploymentPlan,
           composeFilePath: packageUnpack.compose_file_path,
+          composeOverrideFilePath,
           workdir: packageUnpack.unpacked_dir,
         });
         const internalOrigin = new URL(deploymentPlan.internal_base_url).origin;
@@ -510,6 +534,10 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
           package_unpack: packageUnpack,
           compose_policy: composePolicy,
           compose_runtime: composeRuntime,
+          runtime_token: {
+            expires_at: runtimeToken.expiresAt.toISOString(),
+            container_path: APP_RUNTIME_TOKEN_CONTAINER_PATH,
+          },
         });
       } catch (error) {
         const message = (error as Error).message;

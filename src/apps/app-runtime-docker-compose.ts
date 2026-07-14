@@ -20,6 +20,11 @@ export type DockerComposeRuntimeRemovalResult = {
   container_ids: string[];
 };
 
+export type DockerComposeRuntimeStopResult = {
+  status: "stopped" | "not_found";
+  container_ids: string[];
+};
+
 export type DockerComposeRuntimeIdentity = {
   compose_project: string;
   service_name: string;
@@ -128,4 +133,36 @@ export async function removeDockerComposeAppRuntime({
   });
 
   return { status: "removed", container_ids: containerIds };
+}
+
+export async function stopDockerComposeAppRuntime({
+  config,
+  identity,
+}: {
+  config: EnvConfig;
+  identity: DockerComposeRuntimeIdentity;
+}): Promise<DockerComposeRuntimeStopResult> {
+  if (!isDockerComposeRuntimeEnabled(config)) {
+    throw new Error("Docker Compose runtime is disabled");
+  }
+
+  const listResult = await execFileAsync(
+    "docker",
+    buildDockerComposeServiceContainerListArgs(identity),
+    { timeout: 30_000, maxBuffer: 1024 * 1024 },
+  );
+  const containerIds = listResult.stdout.split(/\s+/).filter(Boolean);
+  if (containerIds.some((id) => !/^[a-f0-9]{12,64}$/i.test(id))) {
+    throw new Error("Docker returned an invalid container ID");
+  }
+  if (containerIds.length === 0) {
+    return { status: "not_found", container_ids: [] };
+  }
+
+  await execFileAsync("docker", ["container", "stop", ...containerIds], {
+    timeout: 30_000,
+    maxBuffer: 1024 * 1024,
+  });
+
+  return { status: "stopped", container_ids: containerIds };
 }

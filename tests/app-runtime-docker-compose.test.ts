@@ -5,6 +5,7 @@ import {
   buildDockerComposeUpArgs,
   isDockerComposeRuntimeEnabled,
   startDockerComposeAppRuntime,
+  stopDockerComposeAppRuntime,
 } from "../src/apps/app-runtime-docker-compose.js";
 import { buildAppRuntimeDeploymentPlan } from "../src/apps/app-runtime-plan.js";
 import type { EnvConfig } from "../src/config/index.js";
@@ -96,6 +97,13 @@ describe("Docker Compose app runtime", () => {
         plan: composePlan(),
         composeFilePath: "/tmp/docker-compose.app.yml",
         workdir: "/tmp",
+      }),
+    ).rejects.toThrow("Docker Compose runtime is disabled");
+
+    await expect(
+      stopDockerComposeAppRuntime({
+        config: testConfig(false),
+        identity: { compose_project: "hekatoncheiros-core", service_name: "inventory" },
       }),
     ).rejects.toThrow("Docker Compose runtime is disabled");
   });

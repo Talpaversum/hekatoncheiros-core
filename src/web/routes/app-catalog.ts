@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, RouteHandlerMethod } from "fastify";
 import { z } from "zod";
 
 import { hasPrivilege } from "../../access/privileges.js";
@@ -16,7 +16,10 @@ import {
   isDockerComposeRuntimeEnabled,
   startDockerComposeAppRuntime,
 } from "../../apps/app-runtime-docker-compose.js";
-import { upsertComposeAppRuntimeInstallation } from "../../apps/app-runtime-installation-store.js";
+import {
+  getAppRuntimeInstallation,
+  upsertComposeAppRuntimeInstallation,
+} from "../../apps/app-runtime-installation-store.js";
 import {
   stageAppRuntimePackage,
   unpackAppRuntimePackage,
@@ -26,6 +29,7 @@ import {
   buildAppRuntimeDeploymentPlan,
 } from "../../apps/app-runtime-plan.js";
 import { fetchManifest } from "../../apps/manifest-fetcher.js";
+import { recordAudit } from "../../audit/audit-service.js";
 import { getSelectedTenantLicense, hasAnyTenantLicense } from "../../licensing/license-service.js";
 import { getPlatformInstanceId } from "../../licensing/platform-instance-service.js";
 import { getTrustedOriginsStore } from "../../platform/trusted-origins-store.js";
@@ -298,15 +302,33 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
     return reply.send(entry);
   });
 
-  app.post("/apps/catalog/entries/:app_id/install", async (request, reply) => {
+  const installFromCatalog: RouteHandlerMethod = async (request, reply) => {
     await requireUserAuth(request, app.config);
     requireAppCatalogManage(request);
 
-    const parsed = installFromCatalogSchema.parse(request.body ?? {});
+    const isRuntimeUpdate = request.routeOptions.url?.endsWith("/runtime/update") === true;
+    const parsedInput = installFromCatalogSchema.parse(request.body ?? {});
+    const parsed = isRuntimeUpdate ? { ...parsedInput, mode: "compose" as const } : parsedInput;
     const appId = (request.params as { app_id: string }).app_id;
     const entry = await getAppCatalogStore().getEntry(appId);
     if (!entry) {
       throw new NotFoundError("Catalog entry not found");
+    }
+
+    if (isRuntimeUpdate) {
+      const [installed, runtimeInstallation] = await Promise.all([
+        getAppInstallationStore().getApp(appId),
+        getAppRuntimeInstallation(appId),
+      ]);
+      if (!installed) {
+        throw new NotFoundError("App not installed");
+      }
+      if (!runtimeInstallation) {
+        return reply.code(409).send({
+          message: "App does not have a Core-managed runtime",
+          code: "runtime_not_managed",
+        });
+      }
     }
 
     let deploymentPlan: ReturnType<typeof buildAppRuntimeDeploymentPlan>;
@@ -463,8 +485,25 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
           packageSha256: packageStage.package_sha256,
         });
 
-        return reply.code(201).send({
+        if (isRuntimeUpdate) {
+          await recordAudit({
+            tenantId: request.requestContext.tenant.tenantId,
+            actorUserId: request.requestContext.actor.userId,
+            effectiveUserId: request.requestContext.actor.effectiveUserId,
+            action: "platform.apps.runtime.update",
+            objectRef: entry.app_id,
+            metadata: {
+              app_id: entry.app_id,
+              manifest_sha256: entry.manifest_hash,
+              package_sha256: packageStage.package_sha256,
+              app_version: entry.app_version,
+            },
+          });
+        }
+
+        return reply.code(isRuntimeUpdate ? 200 : 201).send({
           ...result,
+          status: isRuntimeUpdate ? "updated" : result.status,
           install_mode: "compose",
           deployment_plan: deploymentPlan,
           package_stage: packageStage,
@@ -514,7 +553,10 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
       }
       return reply.code(400).send({ message });
     }
-  });
+  };
+
+  app.post("/apps/catalog/entries/:app_id/install", installFromCatalog);
+  app.post("/apps/installed/:app_id/runtime/update", installFromCatalog);
 
   app.patch("/apps/catalog/entries/:app_id/publication", async (request, reply) => {
     await requireUserAuth(request, app.config);

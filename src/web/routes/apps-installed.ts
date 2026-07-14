@@ -9,6 +9,7 @@ import { installFetchedApp } from "../../apps/app-installer.js";
 import {
   isDockerComposeRuntimeEnabled,
   removeDockerComposeAppRuntime,
+  stopDockerComposeAppRuntime,
 } from "../../apps/app-runtime-docker-compose.js";
 import { getAppRuntimeInstallation } from "../../apps/app-runtime-installation-store.js";
 import { fetchManifest } from "../../apps/manifest-fetcher.js";
@@ -540,6 +541,60 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     });
 
     return reply.code(204).send();
+  });
+
+  app.post("/apps/installed/:app_id/runtime/stop", async (request, reply) => {
+    const config = app.config;
+    await requireUserAuth(request, config);
+    if (!hasPrivilege(request.requestContext.privileges, "platform.apps.runtime.manage")) {
+      throw new ForbiddenError();
+    }
+
+    const appId = (request.params as { app_id: string }).app_id;
+    const installed = await getAppInstallationStore().getApp(appId);
+    if (!installed) {
+      throw new NotFoundError("App not installed");
+    }
+
+    const runtimeInstallation = await getAppRuntimeInstallation(appId);
+    if (!runtimeInstallation) {
+      return reply.code(409).send({
+        message: "App does not have a Core-managed runtime",
+        code: "runtime_not_managed",
+      });
+    }
+    if (!isDockerComposeRuntimeEnabled(config)) {
+      return reply.code(409).send({
+        message: "Docker Compose runtime is disabled",
+        code: "runtime_not_enabled",
+      });
+    }
+
+    try {
+      const result = await stopDockerComposeAppRuntime({
+        config,
+        identity: {
+          compose_project: runtimeInstallation.compose_project,
+          service_name: runtimeInstallation.service_name,
+        },
+      });
+
+      await recordAudit({
+        tenantId: request.requestContext.tenant.tenantId,
+        actorUserId: request.requestContext.actor.userId,
+        effectiveUserId: request.requestContext.actor.effectiveUserId,
+        action: "platform.apps.runtime.stop",
+        objectRef: appId,
+        metadata: { app_id: appId, ...result },
+      });
+
+      return reply.send({ app_id: appId, ...result });
+    } catch (error) {
+      return reply.code(400).send({
+        message: (error as Error).message,
+        code: "runtime_stop_failed",
+      });
+    }
   });
 
   app.delete("/apps/installed/:app_id", async (request, reply) => {

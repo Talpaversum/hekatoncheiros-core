@@ -97,6 +97,8 @@ function requireAppRuntimeManage(request: { requestContext: { privileges: string
 }
 
 function toFeedItem(entry: AppCatalogEntry) {
+  const feedMetadata = entry.metadata["feed"] as Record<string, unknown> | undefined;
+  const sourceItem = feedMetadata?.["item"] as Record<string, unknown> | undefined;
   return {
     app_id: entry.app_id,
     name: entry.app_name,
@@ -109,6 +111,12 @@ function toFeedItem(entry: AppCatalogEntry) {
     license_required: entry.license_required,
     license_issuer_url: entry.license_issuer_url,
     deployment: entry.deployment,
+    ...(typeof sourceItem?.["update_signal_jws"] === "string"
+      ? { update_signal_jws: sourceItem["update_signal_jws"] }
+      : {}),
+    ...(typeof sourceItem?.["author_cert_jws"] === "string"
+      ? { author_cert_jws: sourceItem["author_cert_jws"] }
+      : {}),
   };
 }
 
@@ -238,6 +246,7 @@ export async function registerAppCatalogRoutes(app: FastifyInstance) {
       const result = await syncCatalogFeedSource({
         source,
         actorUserId: request.requestContext.actor.userId,
+        config: app.config,
         isTrustedOrigin,
       });
       return reply.send(result);

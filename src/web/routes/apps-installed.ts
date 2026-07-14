@@ -82,7 +82,11 @@ async function upsertUpdateSignal(params: {
        reported_manifest_url = excluded.reported_manifest_url,
        note = excluded.note,
        reported_at = now(),
-       cleared_at = null
+       cleared_at = null,
+       signature_jws = null,
+       author_cert_jws = null,
+       verified_author_id = null,
+       signature_expires_at = null
      returning app_id, source, reported_app_version, reported_manifest_hash, reported_manifest_url, note, reported_at`,
     [
       params.appId,
@@ -122,7 +126,8 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     const catalogEntries = await getAppCatalogStore().listEntries();
     const catalogByAppId = new Map(catalogEntries.map((entry) => [entry.app_id, entry]));
     const updateSignalsResult = await getPool().query(
-      `select app_id, source, reported_app_version, reported_manifest_hash, reported_manifest_url, note, reported_at
+      `select app_id, source, reported_app_version, reported_manifest_hash, reported_manifest_url, note,
+              reported_at, verified_author_id, signature_expires_at
        from core.app_update_signals
        where cleared_at is null`,
     );
@@ -136,6 +141,10 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
           manifest_url: row.reported_manifest_url as string | null,
           note: row.note as string | null,
           reported_at: new Date(row.reported_at).toISOString(),
+          verified_author_id: row.verified_author_id as string | null,
+          signature_expires_at: row.signature_expires_at
+            ? new Date(row.signature_expires_at).toISOString()
+            : null,
         },
       ]),
     );

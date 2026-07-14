@@ -1,10 +1,14 @@
 import { z } from "zod";
 
+import type { EnvConfig } from "../config/index.js";
+import { getPool } from "../db/pool.js";
+
 import {
   type AppCatalogEntry,
   type AppCatalogSource,
   getAppCatalogStore,
 } from "./app-catalog-store.js";
+import { verifyAuthorUpdateSignal } from "./app-update-signal-verifier.js";
 import { assertPublicOrigin, fetchManifest } from "./manifest-fetcher.js";
 
 const MAX_FEED_BYTES = 512_000;
@@ -25,6 +29,8 @@ const feedItemSchema = z.object({
   license_required: z.boolean().optional(),
   license_issuer_url: z.string().url().optional().nullable(),
   deployment: deploymentSchema,
+  update_signal_jws: z.string().trim().min(1).optional(),
+  author_cert_jws: z.string().trim().min(1).optional(),
 });
 
 const feedSchema = z.object({
@@ -141,10 +147,12 @@ async function fetchCatalogFeed(
 export async function syncCatalogFeedSource({
   source,
   actorUserId,
+  config,
   isTrustedOrigin,
 }: {
   source: AppCatalogSource;
   actorUserId: string;
+  config: EnvConfig;
   isTrustedOrigin: (origin: string) => boolean | Promise<boolean>;
 }): Promise<SyncCatalogFeedResult> {
   if (source.source_type !== "feed" || !source.feed_url) {
@@ -178,6 +186,59 @@ export async function syncCatalogFeedSource({
       }
       if (item.version && fetched.appVersion !== item.version) {
         throw new Error("Manifest version does not match feed version");
+      }
+
+      if (Boolean(item.update_signal_jws) !== Boolean(item.author_cert_jws)) {
+        throw new Error("Feed update signal requires update_signal_jws and author_cert_jws");
+      }
+      if (item.update_signal_jws && item.author_cert_jws) {
+        const signal = await verifyAuthorUpdateSignal({
+          updateSignalJws: item.update_signal_jws,
+          authorCertJws: item.author_cert_jws,
+          config,
+        });
+        if (
+          signal.app_id !== fetched.manifest["app_id"] ||
+          signal.app_version !== fetched.appVersion ||
+          signal.manifest_sha256 !== fetched.manifestHash.toLowerCase() ||
+          signal.manifest_url !== new URL(fetched.fetchedFromUrl).toString()
+        ) {
+          throw new Error("Signed update signal does not match the fetched manifest");
+        }
+        if (item.author_id && item.author_id !== signal.author_id) {
+          throw new Error("Signed update signal author does not match feed author_id");
+        }
+
+        await getPool().query(
+          `insert into core.app_update_signals (
+             app_id, source, reported_app_version, reported_manifest_hash,
+             reported_manifest_url, reported_at, cleared_at, signature_jws,
+             author_cert_jws, verified_author_id, signature_expires_at
+           )
+           select $1, 'feed', $2, $3, $4, now(), null, $5, $6, $7, $8::timestamptz
+           where exists (select 1 from core.installed_apps where app_id = $1)
+           on conflict (app_id) do update set
+             source = 'feed',
+             reported_app_version = excluded.reported_app_version,
+             reported_manifest_hash = excluded.reported_manifest_hash,
+             reported_manifest_url = excluded.reported_manifest_url,
+             reported_at = now(),
+             cleared_at = null,
+             signature_jws = excluded.signature_jws,
+             author_cert_jws = excluded.author_cert_jws,
+             verified_author_id = excluded.verified_author_id,
+             signature_expires_at = excluded.signature_expires_at`,
+          [
+            signal.app_id,
+            signal.app_version,
+            signal.manifest_sha256,
+            signal.manifest_url,
+            item.update_signal_jws,
+            item.author_cert_jws,
+            signal.author_id,
+            signal.expires_at,
+          ],
+        );
       }
 
       const entry = await store.upsertFromManifest({

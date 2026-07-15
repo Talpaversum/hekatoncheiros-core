@@ -80,6 +80,30 @@ export const PRIVILEGE_CATALOG: PrivilegeDefinition[] = [
     description: "Write tenant-scoped audit events.",
     scope: "tenant",
   },
+  {
+    id: "core.audit.read.own",
+    label: "Read own audit events",
+    description: "Read user-visible audit events related to the current user.",
+    scope: "tenant",
+  },
+  {
+    id: "core.audit.read.tenant",
+    label: "Read tenant audit events",
+    description: "Read user and tenant-admin audit events in the current tenant.",
+    scope: "tenant",
+  },
+  {
+    id: "platform.audit.read",
+    label: "Read platform audit events",
+    description: "Read all platform and tenant audit events.",
+    scope: "platform",
+  },
+  {
+    id: "platform.audit.retention.manage",
+    label: "Manage audit retention",
+    description: "Run and configure audit retention maintenance.",
+    scope: "platform",
+  },
 ];
 
 export function findPrivilegeDefinition(id: string) {

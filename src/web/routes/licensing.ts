@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 
+import { recordAudit } from "../../audit/audit-service.js";
 import {
   completeLicenseOAuth,
   getSelectedTenantLicense,
@@ -150,6 +151,7 @@ export async function registerLicensingRoutes(app: FastifyInstance) {
     }
 
     await selectTenantLicense(tenantId, body.app_id, body.entitlement_id);
+    await recordAudit({ tenantId, actorUserId: request.requestContext.actor.userId, effectiveUserId: request.requestContext.actor.effectiveUserId, action: "licensing.selection.updated", objectRef: body.app_id, metadata: { app_id: body.app_id, entitlement_id: body.entitlement_id } });
     return reply.code(204).send();
   });
 
@@ -170,6 +172,7 @@ export async function registerLicensingRoutes(app: FastifyInstance) {
     const tenantId = (request.params as { tenantId: string }).tenantId;
     assertTenantAccess(tenantId, request.requestContext.tenant.tenantId);
     await clearSelectedTenantLicense(tenantId, body.app_id);
+    await recordAudit({ tenantId, actorUserId: request.requestContext.actor.userId, effectiveUserId: request.requestContext.actor.effectiveUserId, action: "licensing.selection.updated", objectRef: body.app_id, metadata: { app_id: body.app_id, cleared: true } });
     return reply.code(204).send();
   });
 
@@ -290,6 +293,7 @@ export async function registerLicensingRoutes(app: FastifyInstance) {
       return reply.code(400).send({ message: "app_id and entitlement_id are required" });
     }
     await selectTenantLicense(tenantId, body.app_id, body.entitlement_id);
+    await recordAudit({ tenantId, actorUserId: request.requestContext.actor.userId, effectiveUserId: request.requestContext.actor.effectiveUserId, action: "licensing.selection.updated", objectRef: body.app_id, metadata: { app_id: body.app_id, entitlement_id: body.entitlement_id } });
     return reply.code(204).send();
   });
 
@@ -306,6 +310,7 @@ export async function registerLicensingRoutes(app: FastifyInstance) {
       return reply.code(400).send({ message: "app_id is required" });
     }
     await clearSelectedTenantLicense(tenantId, body.app_id);
+    await recordAudit({ tenantId, actorUserId: request.requestContext.actor.userId, effectiveUserId: request.requestContext.actor.effectiveUserId, action: "licensing.selection.updated", objectRef: body.app_id, metadata: { app_id: body.app_id, cleared: true } });
     return reply.code(204).send();
   });
 
@@ -324,6 +329,7 @@ export async function registerLicensingRoutes(app: FastifyInstance) {
       license_jws: normalized.license_jws,
       author_cert_jws: normalized.author_cert_jws,
     });
+    await recordAudit({ tenantId, actorUserId: request.requestContext.actor.userId, effectiveUserId: request.requestContext.actor.effectiveUserId, action: "licensing.license.imported", objectRef: imported.jti, metadata: { app_id: imported.app_id, entitlement_id: imported.jti, status: imported.status } });
     return reply.send({
       status: "ingested",
       verification_result: imported.status,

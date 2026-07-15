@@ -29,6 +29,7 @@ export async function issueAppRuntimeToken(params: {
     app_id: params.appId,
     tenant_id: params.tenantId,
     purpose: "core-api",
+    privileges: ["core.audit.append"],
   })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(params.appId)

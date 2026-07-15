@@ -3,6 +3,8 @@ import { createHash, randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";
 
+import { recordAudit } from "../../audit/audit-service.js";
+import { getAuditRequestMetadata } from "../../audit/request-metadata.js";
 import { getPool } from "../../db/pool.js";
 import { UnauthorizedError } from "../../shared/errors.js";
 
@@ -105,17 +107,38 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     const { email, password } = request.body;
     const user = await findUserByEmail(email);
     if (!user || user.status !== "active") {
+      await recordAudit({
+        tenantId: app.config.DEFAULT_TENANT_ID, actorType: "anonymous", sourceService: "core",
+        eventType: "auth.login.failed", category: "authentication", action: "auth.login",
+        outcome: "failure", severity: "warning", scope: "tenant", visibility: "tenant_admin",
+        message: "Login failed", metadata: { email }, ...getAuditRequestMetadata(request),
+      });
       throw new UnauthorizedError("Invalid credentials");
     }
 
     const hashed = hashPassword(password);
     if (hashed !== user.password_hash) {
+      await recordAudit({
+        tenantId: app.config.DEFAULT_TENANT_ID, actorType: "anonymous", sourceService: "core",
+        eventType: "auth.login.failed", category: "authentication", action: "auth.login",
+        outcome: "failure", severity: "warning", scope: "tenant", visibility: "tenant_admin",
+        resourceType: "user", resourceId: user.id, message: "Login failed",
+        metadata: { email }, ...getAuditRequestMetadata(request),
+      });
       throw new UnauthorizedError("Invalid credentials");
     }
 
     const tenantId = app.config.DEFAULT_TENANT_ID;
     const { jwt, expiresAt } = await issueAccessToken({ userId: user.id, tenantId, config: app.config });
     const { token, expiresAt: refreshExpiresAt } = await issueRefreshToken({ userId: user.id });
+
+    await recordAudit({
+      tenantId, actorUserId: user.id, effectiveUserId: user.id, actorType: "user", sourceService: "core",
+      eventType: "auth.login.succeeded", category: "authentication", action: "auth.login",
+      outcome: "success", severity: "info", scope: "user", visibility: "user",
+      resourceType: "user", resourceId: user.id, message: "Login succeeded",
+      ...getAuditRequestMetadata(request),
+    });
 
     return reply.send({
       access_token: jwt,

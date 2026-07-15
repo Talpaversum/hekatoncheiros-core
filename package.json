@@ -15,7 +15,8 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts",
     "codegen:openapi": "openapi-typescript docs/api/openapi.yml -o src/generated/openapi/schema.d.ts",
-    "validate:localization": "node scripts/validate-localization.mjs"
+    "validate:localization": "node scripts/validate-localization.mjs",
+    "audit:retention": "node dist/src/audit/retention-cli.js"
   },
   "repository": {
     "type": "git",

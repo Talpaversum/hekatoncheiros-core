@@ -11,6 +11,7 @@ export interface AppClaims {
   iss: string;
   app_id: string;
   tenant_id?: string;
+  privileges?: string[];
 }
 
 export async function verifyAppJwt(token: string, config: EnvConfig): Promise<AppClaims> {

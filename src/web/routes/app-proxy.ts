@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 
 import { hasAllPrivileges } from "../../access/privileges.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
+import { recordAudit } from "../../audit/audit-service.js";
+import { getAuditRequestMetadata } from "../../audit/request-metadata.js";
 import { hasSelectedActiveLicense } from "../../licensing/license-service.js";
 import { ForbiddenError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
@@ -27,6 +29,17 @@ export async function registerAppProxyRoutes(app: FastifyInstance) {
     }
 
     if (!hasAllPrivileges(request.requestContext.privileges, appInfo.required_privileges)) {
+      await recordAudit({
+        tenantId: request.requestContext.tenant.tenantId,
+        actorUserId: request.requestContext.actor.userId,
+        effectiveUserId: request.requestContext.actor.effectiveUserId,
+        actorType: "user", applicationId: appInfo.app_id, sourceService: "core",
+        eventType: appInfo.app_id === "com.talpaversum.inventory" ? "inventory.operation.denied" : "app.operation.denied",
+        category: "authorization", action: "app.proxy.access", outcome: "denied", severity: "warning",
+        scope: "tenant", visibility: "tenant_admin", resourceType: "application", resourceId: appInfo.app_id,
+        message: "Application operation denied", metadata: { required_privileges: appInfo.required_privileges },
+        ...getAuditRequestMetadata(request),
+      });
       throw new ForbiddenError();
     }
 
@@ -59,6 +72,7 @@ export async function registerAppProxyRoutes(app: FastifyInstance) {
         "x-tenant-id": request.requestContext.tenant.tenantId,
         "x-actor-id": request.requestContext.actor.userId,
         "x-actor-effective-id": request.requestContext.actor.effectiveUserId,
+        "x-correlation-id": getAuditRequestMetadata(request).correlationId,
       },
       body: payload,
     });

@@ -70,6 +70,13 @@ describe("DELETE /api/v1/apps/installed/:app_id", () => {
       [appId, slug, "Test Uninstall App", baseUrl, `/api/v1/apps/${slug}/ui/plugin.js`, "sha256-test", [], "[]", "{}"],
     );
 
+    await pool.query(
+      `insert into core.app_runtime_installations (
+         app_id, runtime_type, compose_project, service_name, package_sha256
+       ) values ($1, 'compose', $2, $3, $4)`,
+      [appId, "hc-test-runtime", "test-app", "a".repeat(64)],
+    );
+
     const token = await new SignJWT({ tenant_id: testTenantId })
       .setProtectedHeader({ alg: "HS256" })
       .setSubject(testUserId)
@@ -78,6 +85,20 @@ describe("DELETE /api/v1/apps/installed/:app_id", () => {
       .setIssuedAt()
       .setExpirationTime("5m")
       .sign(new TextEncoder().encode(process.env["JWT_SECRET"] ?? "supersecretkeysupersecret"));
+
+    const beforeDeleteResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/apps/installed",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const beforeDeletePayload = beforeDeleteResponse.json() as {
+      items: Array<{ app_id: string; managed_runtime: { compose_project: string; service_name: string } | null }>;
+    };
+    expect(beforeDeletePayload.items.find((item) => item.app_id === appId)?.managed_runtime).toMatchObject({
+      compose_project: "hc-test-runtime",
+      service_name: "test-app",
+    });
+    await pool.query("delete from core.app_runtime_installations where app_id = $1", [appId]);
 
     const deleteResponse = await app.inject({
       method: "DELETE",

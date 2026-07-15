@@ -10,7 +10,10 @@ import {
   removeDockerComposeAppRuntime,
   stopDockerComposeAppRuntime,
 } from "../../apps/app-runtime-docker-compose.js";
-import { getAppRuntimeInstallation } from "../../apps/app-runtime-installation-store.js";
+import {
+  getAppRuntimeInstallation,
+  listAppRuntimeInstallations,
+} from "../../apps/app-runtime-installation-store.js";
 import {
   APP_RUNTIME_TOKEN_CONTAINER_PATH,
   deliverAppRuntimeToken,
@@ -122,9 +125,13 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
       throw new ForbiddenError();
     }
     const store = getAppInstallationStore();
-    const apps = await store.listInstalledApps();
-    const catalogEntries = await getAppCatalogStore().listEntries();
+    const [apps, catalogEntries, runtimeInstallations] = await Promise.all([
+      store.listInstalledApps(),
+      getAppCatalogStore().listEntries(),
+      listAppRuntimeInstallations(),
+    ]);
     const catalogByAppId = new Map(catalogEntries.map((entry) => [entry.app_id, entry]));
+    const runtimeByAppId = new Map(runtimeInstallations.map((runtime) => [runtime.app_id, runtime]));
     const updateSignalsResult = await getPool().query(
       `select app_id, source, reported_app_version, reported_manifest_hash, reported_manifest_url, note,
               reported_at, verified_author_id, signature_expires_at
@@ -200,6 +207,7 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
                 };
               })()
             : null,
+          managed_runtime: runtimeByAppId.get(installedApp.app_id) ?? null,
           resolved_entitlement: selectedLicense
             ? {
                 entitlement_id: selectedLicense.jti,

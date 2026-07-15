@@ -36,6 +36,16 @@ export async function getAppRuntimeInstallation(
   return result.rowCount ? mapRow(result.rows[0]) : null;
 }
 
+export async function listAppRuntimeInstallations(): Promise<AppRuntimeInstallation[]> {
+  const result = await getPool().query(
+    `select app_id, runtime_type, compose_project, service_name, package_sha256,
+            created_at, updated_at
+       from core.app_runtime_installations
+      order by app_id`,
+  );
+  return result.rows.map(mapRow);
+}
+
 export async function upsertComposeAppRuntimeInstallation(input: {
   appId: string;
   composeProject: string;

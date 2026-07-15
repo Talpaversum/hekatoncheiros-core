@@ -20,6 +20,9 @@ const passwordSchema = z.object({
   new_password: z.string().min(8).max(256),
 });
 
+const preferenceNamespaceSchema = z.string().regex(/^[a-z][a-z0-9._-]{0,79}$/);
+const preferenceSchema = z.object({ value: z.record(z.string(), z.unknown()).nullable() });
+
 function hashPassword(password: string) {
   return createHash("sha256").update(password).digest("hex");
 }
@@ -37,6 +40,29 @@ function mapUser(row: Record<string, unknown>) {
 }
 
 export async function registerAccountRoutes(app: FastifyInstance) {
+  app.get("/account/preferences/:namespace", async (request, reply) => {
+    await requireUserAuth(request, app.config);
+    const namespace = preferenceNamespaceSchema.parse((request.params as { namespace: string }).namespace);
+    const result = await getPool().query("select value, updated_at from core.user_preferences where user_id = $1 and namespace = $2", [request.requestContext.actor.userId, namespace]);
+    return reply.send(result.rows[0] ?? { value: null, updated_at: null });
+  });
+
+  app.put("/account/preferences/:namespace", async (request, reply) => {
+    await requireUserAuth(request, app.config);
+    const namespace = preferenceNamespaceSchema.parse((request.params as { namespace: string }).namespace);
+    const parsed = preferenceSchema.parse(request.body);
+    if (Buffer.byteLength(JSON.stringify(parsed.value), "utf8") > 128 * 1024) throw new ForbiddenError("Preference value is too large");
+    const pool = getPool();
+    if (parsed.value === null) {
+      await pool.query("delete from core.user_preferences where user_id = $1 and namespace = $2", [request.requestContext.actor.userId, namespace]);
+    } else {
+      await pool.query(`insert into core.user_preferences (user_id, namespace, value) values ($1, $2, $3)
+        on conflict (user_id, namespace) do update set value = excluded.value, updated_at = now()`, [request.requestContext.actor.userId, namespace, parsed.value]);
+    }
+    await recordAudit({ tenantId: request.requestContext.tenant.tenantId, actorUserId: request.requestContext.actor.userId, effectiveUserId: request.requestContext.actor.effectiveUserId, action: "account.preferences.updated", objectRef: namespace, metadata: { namespace, reset: parsed.value === null } });
+    return reply.code(204).send();
+  });
+
   app.get("/account", async (request, reply) => {
     await requireUserAuth(request, app.config);
 

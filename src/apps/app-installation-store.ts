@@ -35,6 +35,7 @@ export type InstalledApp = {
     licensing?: {
       required?: boolean;
     };
+    runtime?: { healthCheck?: { path?: string; timeoutSeconds?: number; intervalSeconds?: number } };
     integration?: {
       ui?: {
         artifact?: {

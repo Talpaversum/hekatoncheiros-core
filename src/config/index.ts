@@ -25,6 +25,9 @@ const envSchema = z.object({
     .string()
     .default("false")
     .transform((value) => value === "true" || value === "1"),
+  APP_RUNTIME_HEALTH_INTERVAL_MS: z.coerce.number().int().min(1000).default(5000),
+  APP_RUNTIME_HEALTH_TIMEOUT_MS: z.coerce.number().int().min(100).default(1500),
+  APP_RUNTIME_HEALTH_FAILURE_THRESHOLD: z.coerce.number().int().min(1).default(2),
   APP_CATALOG_AUTO_REFRESH_ENABLED: z
     .string()
     .default("false")

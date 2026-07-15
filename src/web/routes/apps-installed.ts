@@ -10,6 +10,7 @@ import {
   removeDockerComposeAppRuntime,
   stopDockerComposeAppRuntime,
 } from "../../apps/app-runtime-docker-compose.js";
+import { getAppRuntimeHealth } from "../../apps/app-runtime-health.js";
 import {
   getAppRuntimeInstallation,
   listAppRuntimeInstallations,
@@ -208,6 +209,7 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
               })()
             : null,
           managed_runtime: runtimeByAppId.get(installedApp.app_id) ?? null,
+          runtime_health: getAppRuntimeHealth(installedApp.app_id),
           resolved_entitlement: selectedLicense
             ? {
                 entitlement_id: selectedLicense.jti,

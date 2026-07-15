@@ -16,6 +16,9 @@ const patchTenantSchema = z.object({
 const patchPlatformSchema = z.object({
   name: z.string().trim().min(1).max(160).optional(),
   public_base_url: z.string().trim().url().optional().nullable(),
+  runtime_health_interval_ms: z.number().int().min(1000).max(300000).optional(),
+  runtime_health_timeout_ms: z.number().int().min(100).max(30000).optional(),
+  runtime_health_failure_threshold: z.number().int().min(1).max(10).optional(),
 });
 
 function requireTenantConfigManage(request: { requestContext: { privileges: string[] } }) {
@@ -46,6 +49,9 @@ function mapPlatform(row: Record<string, unknown>) {
     instance_id: String(row["instance_id"]),
     name: String(row["name"]),
     public_base_url: (row["public_base_url"] as string | null) ?? null,
+    runtime_health_interval_ms: Number(row["runtime_health_interval_ms"] ?? 5000),
+    runtime_health_timeout_ms: Number(row["runtime_health_timeout_ms"] ?? 1500),
+    runtime_health_failure_threshold: Number(row["runtime_health_failure_threshold"] ?? 2),
     updated_at: new Date(String(row["updated_at"])).toISOString(),
   };
 }
@@ -110,7 +116,7 @@ export async function registerConfigurationRoutes(app: FastifyInstance) {
     const instanceId = await getPlatformInstanceId();
     const pool = getPool();
     const result = await pool.query(
-      "select instance_id, name, public_base_url, updated_at from core.platform_instance where instance_id = $1",
+      "select instance_id, name, public_base_url, runtime_health_interval_ms, runtime_health_timeout_ms, runtime_health_failure_threshold, updated_at from core.platform_instance where instance_id = $1",
       [instanceId],
     );
 
@@ -132,14 +138,20 @@ export async function registerConfigurationRoutes(app: FastifyInstance) {
       `update core.platform_instance
           set name = coalesce($2, name),
               public_base_url = case when $3 then $4 else public_base_url end,
+              runtime_health_interval_ms = coalesce($5, runtime_health_interval_ms),
+              runtime_health_timeout_ms = coalesce($6, runtime_health_timeout_ms),
+              runtime_health_failure_threshold = coalesce($7, runtime_health_failure_threshold),
               updated_at = now()
         where instance_id = $1
-        returning instance_id, name, public_base_url, updated_at`,
+        returning instance_id, name, public_base_url, runtime_health_interval_ms, runtime_health_timeout_ms, runtime_health_failure_threshold, updated_at`,
       [
         instanceId,
         parsed.name ?? null,
         Object.prototype.hasOwnProperty.call(parsed, "public_base_url"),
         parsed.public_base_url ?? null,
+        parsed.runtime_health_interval_ms ?? null,
+        parsed.runtime_health_timeout_ms ?? null,
+        parsed.runtime_health_failure_threshold ?? null,
       ],
     );
 

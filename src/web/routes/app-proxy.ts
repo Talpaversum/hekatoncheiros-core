@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 
 import { hasAllPrivileges } from "../../access/privileges.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
+import { getAppRuntimeHealth } from "../../apps/app-runtime-health.js";
 import { recordAudit } from "../../audit/audit-service.js";
 import { getAuditRequestMetadata } from "../../audit/request-metadata.js";
 import { hasSelectedActiveLicense } from "../../licensing/license-service.js";
@@ -26,6 +27,11 @@ export async function registerAppProxyRoutes(app: FastifyInstance) {
 
     if (appInfo.enabled === false) {
       return reply.code(404).send({ message: "Unknown app" });
+    }
+
+    const runtime = getAppRuntimeHealth(appInfo.app_id);
+    if (runtime.status !== "healthy" && runtime.status !== "degraded") {
+      return reply.code(503).type("application/problem+json").send({ type: "https://hekatoncheiros.dev/problems/application-unavailable", title: "Application unavailable", status: 503, detail: "The requested application is currently unavailable.", appId: appInfo.app_id, runtimeStatus: runtime.status });
     }
 
     if (!hasAllPrivileges(request.requestContext.privileges, appInfo.required_privileges)) {

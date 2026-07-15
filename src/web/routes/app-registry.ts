@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 
 import { hasAllPrivileges } from "../../access/privileges.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
+import { getAppRuntimeHealth } from "../../apps/app-runtime-health.js";
 import { hasSelectedActiveLicense } from "../../licensing/license-service.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 
@@ -87,6 +88,7 @@ export async function registerAppRegistryRoutes(app: FastifyInstance) {
           },
           nav_entries: filtered,
           help_entries: helpEntries,
+          runtime: getAppRuntimeHealth(app.app_id),
         };
       });
 

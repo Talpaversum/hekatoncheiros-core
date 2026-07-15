@@ -4,6 +4,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import fastify from "fastify";
 
 import { registerCatalogAutoRefresh } from "./apps/app-catalog-auto-refresh.js";
+import { registerAppRuntimeHealthMonitor } from "./apps/app-runtime-health.js";
 import { loadConfig, type EnvConfig } from "./config/index.js";
 import { registerPipeline } from "./platform/pipeline.js";
 import { registerAppCatalogPublicRoutes } from "./web/routes/app-catalog.js";
@@ -20,6 +21,7 @@ export async function buildApp() {
   const app = fastify({ logger: true });
   app.decorate("config", config);
   registerCatalogAutoRefresh(app);
+  registerAppRuntimeHealthMonitor(app);
 
   await app.register(cors, {
     origin: true,

@@ -66,6 +66,64 @@ export interface ImportLicenseInput {
   author_cert_jws?: string | null;
 }
 
+export async function createOfflineActivationRequest(params: {
+  tenantId: string;
+  appId: string;
+  licenseMode: LicenseMode;
+}) {
+  assertAuthorScopedAppId(params.appId);
+  const config = loadConfig();
+  if (!config.LICENSING_DCR_SIGNING_PRIVATE_JWK_JSON) {
+    throw new HttpError(500, "Core activation signing key is not configured");
+  }
+  const privateJwk = JSON.parse(config.LICENSING_DCR_SIGNING_PRIVATE_JWK_JSON) as JWK;
+  const key = await importJWK(privateJwk, "EdDSA");
+  const platformInstanceId = await getPlatformInstanceAudienceId();
+  const now = Math.floor(Date.now() / 1000);
+  const requestId = `har_${randomUUID().replace(/-/g, "")}`;
+  const requestJws = await new SignJWT({
+    typ: "hc-license-activation-request",
+    v: 1,
+    request_id: requestId,
+    tenant_id: params.tenantId,
+    app_id: params.appId,
+    license_mode: params.licenseMode,
+    platform_instance_id: platformInstanceId,
+    nonce: randomUUID(),
+  })
+    .setProtectedHeader({ alg: "EdDSA", kid: privateJwk.kid })
+    .setIssuer(platformInstanceId)
+    .setAudience("hc-license-issuer")
+    .setIssuedAt(now)
+    .setExpirationTime(now + 7 * 86400)
+    .sign(key);
+  return {
+    request_typ: "hc-license-activation-request",
+    v: 1,
+    request_id: requestId,
+    request_jws: requestJws,
+    core_public_jwk: config.LICENSING_DCR_SIGNING_PUBLIC_JWK_JSON
+      ? JSON.parse(config.LICENSING_DCR_SIGNING_PUBLIC_JWK_JSON)
+      : null,
+  };
+}
+
+export async function syncIssuerRevocations(params: { issuerUrl: string; syncedBy: string }) {
+  const url = new URL("/v1/revocations", params.issuerUrl);
+  if (url.protocol !== "https:" && url.hostname !== "localhost" && url.hostname !== "127.0.0.1" && url.hostname !== "host.docker.internal") {
+    throw new HttpError(400, "Issuer revocation URL must use HTTPS outside local development");
+  }
+  const response = await fetch(url, { signal: AbortSignal.timeout(10_000), headers: { accept: "application/json" } });
+  if (!response.ok) throw new HttpError(400, "Unable to synchronize issuer revocations");
+  const revocations = await response.json() as Record<string, unknown>;
+  await getPool().query(
+    `insert into core.license_issuer_revocation_snapshots(issuer_url,revocations_json,synced_at,synced_by)
+     values($1,$2::jsonb,now(),$3) on conflict(issuer_url) do update set revocations_json=excluded.revocations_json,synced_at=now(),synced_by=excluded.synced_by`,
+    [new URL(params.issuerUrl).origin, JSON.stringify(revocations), params.syncedBy],
+  );
+  return { issuer_url: new URL(params.issuerUrl).origin, revocations };
+}
+
 interface OAuthState {
   tenantId: string;
   issuerUrl: string;
@@ -126,13 +184,31 @@ function toArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string");
 }
 
-function parseRootJwks() {
+async function loadTrustState(): Promise<{
+  jwks: ReturnType<typeof createLocalJWKSet>;
+  registryId: string | null;
+  revocations: Record<string, unknown>;
+}> {
   const config = loadConfig();
   try {
+    if (config.AUTHOR_REGISTRY_URL) {
+      const result = await getPool().query(
+        "select root_jwks_json,revocations_json,trust_anchor_json from core.author_registry_snapshots where registry_url=$1",
+        [config.AUTHOR_REGISTRY_URL],
+      );
+      if (result.rowCount) {
+        const anchor = (result.rows[0].trust_anchor_json ?? {}) as Record<string, unknown>;
+        return {
+          jwks: createLocalJWKSet(result.rows[0].root_jwks_json as JSONWebKeySet),
+          registryId: typeof anchor["registry_id"] === "string" ? anchor["registry_id"] : null,
+          revocations: (result.rows[0].revocations_json ?? {}) as Record<string, unknown>,
+        };
+      }
+    }
     const parsed = JSON.parse(config.LICENSING_ROOT_JWKS_JSON) as JSONWebKeySet;
-    return createLocalJWKSet(parsed);
+    return { jwks: createLocalJWKSet(parsed), registryId: null, revocations: {} };
   } catch {
-    throw new HttpError(500, "Invalid LICENSING_ROOT_JWKS_JSON configuration");
+    throw new HttpError(500, "Invalid licensing trust configuration");
   }
 }
 
@@ -162,7 +238,11 @@ function getLicenseStatus(params: {
   return "active";
 }
 
-async function isLocallyRevoked(authorId: string, authorKid: string | null, jti: string): Promise<boolean> {
+function includesRevocation(items: unknown, predicate: (item: Record<string, unknown>) => boolean) {
+  return Array.isArray(items) && items.some((item) => typeof item === "object" && item !== null && predicate(item as Record<string, unknown>));
+}
+
+async function isRevoked(authorId: string, authorKid: string | null, rootKid: string | null, jti: string, registryRevocations: Record<string, unknown>): Promise<boolean> {
   const pool = getPool();
   const values: Array<[string, string]> = [
     ["author_id", authorId],
@@ -177,7 +257,15 @@ async function isLocallyRevoked(authorId: string, authorKid: string | null, jti:
       pool.query("select 1 from core.license_revocations_local where type = $1 and value = $2 limit 1", [type, value]),
     ),
   );
-  return checks.some((result) => (result.rowCount ?? 0) > 0);
+  if (checks.some((result) => (result.rowCount ?? 0) > 0)) return true;
+  if (includesRevocation(registryRevocations["revoked_author_ids"], (item) => item["author_id"] === authorId)) return true;
+  if (authorKid && includesRevocation(registryRevocations["revoked_author_kids"], (item) => item["author_id"] === authorId && item["kid"] === authorKid)) return true;
+  if (rootKid && includesRevocation(registryRevocations["revoked_root_kids"], (item) => item["kid"] === rootKid)) return true;
+  const issuerSnapshots = await pool.query("select revocations_json from core.license_issuer_revocation_snapshots");
+  return issuerSnapshots.rows.some((row) => {
+    const revocations = (row.revocations_json ?? {}) as Record<string, unknown>;
+    return includesRevocation(revocations["revoked_license_jtis"], (item) => item["jti"] === jti);
+  });
 }
 
 function assertLicenseAudience(mode: LicenseMode, audience: string[], platformInstanceId: string) {
@@ -203,8 +291,9 @@ async function verifyLicenseMaterial(input: ImportLicenseInput): Promise<{
     throw new HttpError(400, "author_cert_jws is required");
   }
 
-  const rootJwks = parseRootJwks();
-  const certVerified = await jwtVerify(input.author_cert_jws, rootJwks, {
+  const trust = await loadTrustState();
+  const certHeader = decodeProtectedHeader(input.author_cert_jws);
+  const certVerified = await jwtVerify(input.author_cert_jws, trust.jwks, {
     issuer: "hc-author-registry",
     clockTolerance: config.LICENSING_CLOCK_SKEW_SECONDS,
   });
@@ -213,6 +302,9 @@ async function verifyLicenseMaterial(input: ImportLicenseInput): Promise<{
   const certType = certPayload["typ"];
   if (certType !== "hc-author-cert") {
     throw new HttpError(400, "Invalid author cert typ");
+  }
+  if (trust.registryId && certPayload["registry_id"] !== trust.registryId) {
+    throw new HttpError(400, "Author certificate registry_id does not match the trusted registry");
   }
 
   const authorId = requireStringClaim(certPayload, "sub");
@@ -266,7 +358,7 @@ async function verifyLicenseMaterial(input: ImportLicenseInput): Promise<{
   const audience = toArray(licensePayload.aud);
   assertLicenseAudience(mode, audience, hcpi);
 
-  const revoked = await isLocallyRevoked(authorId, authorKid, jti);
+  const revoked = await isRevoked(authorId, authorKid, typeof certHeader.kid === "string" ? certHeader.kid : null, jti, trust.revocations);
   const status = getLicenseStatus({ payload: licensePayload, revoked, invalid: false });
 
   return {
@@ -759,8 +851,17 @@ export async function validateStoredLicense(tenantId: string, licenseJti: string
     license_jws: found.license_jws,
     author_cert_jws: found.author_cert_jws,
   });
-
+  await getPool().query("update core.tenant_licenses set status=$3,updated_at=now() where tenant_id=$1 and jti=$2", [tenantId, licenseJti, result.status]);
   return result;
+}
+
+export async function refreshStoredLicenseStatuses() {
+  const rows = (await getPool().query("select tenant_id,jti from core.tenant_licenses")).rows;
+  const results = await Promise.all(rows.map(async (row) => {
+    const result = await validateStoredLicense(String(row.tenant_id), String(row.jti));
+    return { jti: String(row.jti), status: result.status };
+  }));
+  return results;
 }
 
 export async function mapLegacyAppIdsInMemory(appId: string): Promise<string> {

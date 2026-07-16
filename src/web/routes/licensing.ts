@@ -12,6 +12,9 @@ import {
   validateLicenseMaterial,
   validateStoredLicense,
   clearSelectedTenantLicense,
+  createOfflineActivationRequest,
+  syncIssuerRevocations,
+  refreshStoredLicenseStatuses,
 } from "../../licensing/license-service.js";
 import { getPlatformInstanceAudienceId } from "../../licensing/platform-instance-service.js";
 import { ForbiddenError } from "../../shared/errors.js";
@@ -338,5 +341,26 @@ export async function registerLicensingRoutes(app: FastifyInstance) {
         app_id: imported.app_id,
       },
     });
+  });
+
+  app.post("/licensing/offline/request", async (request, reply) => {
+    await requireUserAuth(request, app.config);
+    if (!request.requestContext.privileges.includes("core.licensing.ingest_offline")) throw new ForbiddenError();
+    const body = request.body as { app_id?: string; license_mode?: "portable" | "instance_bound" };
+    if (!body?.app_id || !body.license_mode) return reply.code(400).send({ message: "app_id and license_mode are required" });
+    const exported = await createOfflineActivationRequest({ tenantId: request.requestContext.tenant.tenantId, appId: body.app_id, licenseMode: body.license_mode });
+    await recordAudit({ tenantId: request.requestContext.tenant.tenantId, actorUserId: request.requestContext.actor.userId, effectiveUserId: request.requestContext.actor.effectiveUserId, action: "licensing.activation.offline_exported", objectRef: exported.request_id, metadata: { app_id: body.app_id, license_mode: body.license_mode } });
+    return reply.send(exported);
+  });
+
+  app.post("/licensing/revocations/sync", async (request, reply) => {
+    await requireUserAuth(request, app.config);
+    if (!request.requestContext.privileges.includes("core.licensing.ingest_offline")) throw new ForbiddenError();
+    const issuerUrl = String((request.body as { issuer_url?: string })?.issuer_url ?? "");
+    if (!issuerUrl) return reply.code(400).send({ message: "issuer_url is required" });
+    const result = await syncIssuerRevocations({ issuerUrl, syncedBy: request.requestContext.actor.userId });
+    const refreshed = await refreshStoredLicenseStatuses();
+    await recordAudit({ tenantId: request.requestContext.tenant.tenantId, actorUserId: request.requestContext.actor.userId, effectiveUserId: request.requestContext.actor.effectiveUserId, action: "licensing.revocations.synchronized", objectRef: result.issuer_url, metadata: {} });
+    return reply.send({ ...result, refreshed_licenses: refreshed.length });
   });
 }

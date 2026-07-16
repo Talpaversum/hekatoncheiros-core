@@ -16,6 +16,7 @@ describe("author registry client", () => {
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ author_id: "aut_123", display_name: "Example" }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ inserted: 1 }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ author_id: "aut_123", status: "active" }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ author_cert_jws: "cert.jws", root_kid: "root-1" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -32,7 +33,7 @@ describe("author registry client", () => {
       author_cert_jws: "cert.jws",
       root_kid: "root-1",
     });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
       headers: expect.objectContaining({
         authorization: "Bearer registry-admin-token",

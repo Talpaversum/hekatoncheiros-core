@@ -3,8 +3,10 @@ import type { FastifyInstance } from "fastify";
 import { hasAllPrivileges } from "../../access/privileges.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { getAppRuntimeHealth } from "../../apps/app-runtime-health.js";
+import { issueAppUserDelegation } from "../../apps/app-user-delegation.js";
 import { recordAudit } from "../../audit/audit-service.js";
 import { getAuditRequestMetadata } from "../../audit/request-metadata.js";
+import { getPool } from "../../db/pool.js";
 import { hasSelectedActiveLicense } from "../../licensing/license-service.js";
 import { ForbiddenError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
@@ -71,6 +73,19 @@ export async function registerAppProxyRoutes(app: FastifyInstance) {
           ? request.body
           : JSON.stringify(request.body ?? {});
 
+    const requestMetadata = getAuditRequestMetadata(request);
+    const userResult = await getPool().query("select email from core.users where id = $1 limit 1", [
+      request.requestContext.actor.userId,
+    ]);
+    const username = String(userResult.rows[0]?.email ?? request.requestContext.actor.userId);
+    const delegation = await issueAppUserDelegation({
+      appId: appInfo.app_id,
+      context: request.requestContext,
+      username,
+      correlationId: requestMetadata.correlationId,
+      config,
+    });
+
     const response = await fetch(url, {
       method: request.method,
       headers: {
@@ -78,7 +93,10 @@ export async function registerAppProxyRoutes(app: FastifyInstance) {
         "x-tenant-id": request.requestContext.tenant.tenantId,
         "x-actor-id": request.requestContext.actor.userId,
         "x-actor-effective-id": request.requestContext.actor.effectiveUserId,
-        "x-correlation-id": getAuditRequestMetadata(request).correlationId,
+        "x-correlation-id": requestMetadata.correlationId,
+        "x-hc-user-delegation": delegation,
+        "x-forwarded-for": requestMetadata.ipAddress ?? "",
+        "x-forwarded-user-agent": requestMetadata.userAgent ?? "",
       },
       body: payload,
     });

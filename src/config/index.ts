@@ -11,6 +11,7 @@ const envSchema = z.object({
   JWT_AUDIENCE_USER: z.string().default("hc-user"),
   JWT_AUDIENCE_APP: z.string().default("hc-app"),
   JWT_SECRET: z.string().min(16),
+  APP_DELEGATION_SIGNING_PRIVATE_JWK_JSON: z.string().optional(),
   INSTALLER_TOKEN_SECRET: z.string().min(16),
   INSTALLER_TOKEN_ISSUER: z.string().default("hekatoncheiros-core-installer"),
   DEFAULT_TENANT_ID: z.string().default("tnt_default"),
@@ -35,6 +36,7 @@ const envSchema = z.object({
   APP_CATALOG_AUTO_REFRESH_INTERVAL_SECONDS: z.coerce.number().int().min(60).default(300),
   AUTHOR_REGISTRY_URL: z.string().default(""),
   AUTHOR_REGISTRY_ADMIN_TOKEN: z.string().default(""),
+  AUTHOR_REGISTRY_APP_ID: z.string().default("hekatoncheiros/author-registry"),
   AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(365),
   AUDIT_RETENTION_BATCH_SIZE: z.coerce.number().int().min(1).max(10000).default(1000),
 });

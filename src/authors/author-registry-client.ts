@@ -3,7 +3,7 @@ import type { EnvConfig } from "../config/index.js";
 export type PublicJwks = { keys: Array<Record<string, unknown>> };
 
 function registryBaseUrl(config: EnvConfig): URL {
-  if (!config.AUTHOR_REGISTRY_URL || !config.AUTHOR_REGISTRY_ADMIN_TOKEN) {
+  if (!config.AUTHOR_REGISTRY_URL) {
     throw new Error("Author registry integration is not configured");
   }
   const url = new URL(config.AUTHOR_REGISTRY_URL);
@@ -35,10 +35,11 @@ function assertPublicJwks(jwks: PublicJwks): void {
 async function registryRequest<T>(params: {
   config: EnvConfig;
   path: string;
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "DELETE";
   body?: unknown;
   authorId?: string;
   authenticated?: boolean;
+  delegatedUserToken?: string;
 }): Promise<T> {
   const baseUrl = registryBaseUrl(params.config);
   const response = await fetch(new URL(params.path, baseUrl), {
@@ -48,9 +49,11 @@ async function registryRequest<T>(params: {
     headers: {
       accept: "application/json",
       ...(params.body ? { "content-type": "application/json" } : {}),
-      ...(params.authenticated === false
-        ? {}
-        : { authorization: `Bearer ${params.config.AUTHOR_REGISTRY_ADMIN_TOKEN}` }),
+      ...(params.authenticated === false ? {} : params.delegatedUserToken
+        ? { "x-hc-user-delegation": params.delegatedUserToken }
+        : params.config.AUTHOR_REGISTRY_ADMIN_TOKEN
+          ? { authorization: `Bearer ${params.config.AUTHOR_REGISTRY_ADMIN_TOKEN}` }
+          : {}),
       ...(params.authorId ? { "x-author-id": params.authorId } : {}),
     },
     body: params.body ? JSON.stringify(params.body) : undefined,
@@ -66,6 +69,7 @@ export async function onboardAuthor(params: {
   displayName: string;
   jwks: PublicJwks;
   ttlDays: number;
+  delegatedUserToken?: string;
 }) {
   assertPublicJwks(params.jwks);
   const author = await registryRequest<{ author_id: string; display_name: string }>({
@@ -73,6 +77,7 @@ export async function onboardAuthor(params: {
     path: "/v1/authors",
     method: "POST",
     body: { display_name: params.displayName },
+    delegatedUserToken: params.delegatedUserToken,
   });
   await registryRequest({
     config: params.config,
@@ -80,6 +85,14 @@ export async function onboardAuthor(params: {
     method: "POST",
     authorId: author.author_id,
     body: { jwks: params.jwks },
+    delegatedUserToken: params.delegatedUserToken,
+  });
+  await registryRequest({
+    config: params.config,
+    path: `/v1/admin/authors/${encodeURIComponent(author.author_id)}/status`,
+    method: "POST",
+    body: { status: "active", notes: "Approved during Core author onboarding" },
+    delegatedUserToken: params.delegatedUserToken,
   });
   const cert = await registryRequest<{ author_cert_jws: string; root_kid: string }>({
     config: params.config,
@@ -87,6 +100,7 @@ export async function onboardAuthor(params: {
     method: "POST",
     authorId: author.author_id,
     body: { ttl_days: params.ttlDays },
+    delegatedUserToken: params.delegatedUserToken,
   });
   return { ...author, ...cert };
 }
@@ -96,6 +110,7 @@ export async function rotateAuthorKeys(params: {
   authorId: string;
   jwks: PublicJwks;
   ttlDays: number;
+  delegatedUserToken?: string;
 }) {
   assertPublicJwks(params.jwks);
   await registryRequest({
@@ -104,6 +119,7 @@ export async function rotateAuthorKeys(params: {
     method: "POST",
     authorId: params.authorId,
     body: { jwks: params.jwks },
+    delegatedUserToken: params.delegatedUserToken,
   });
   return registryRequest<{ author_cert_jws: string; root_kid: string }>({
     config: params.config,
@@ -111,14 +127,15 @@ export async function rotateAuthorKeys(params: {
     method: "POST",
     authorId: params.authorId,
     body: { ttl_days: params.ttlDays },
+    delegatedUserToken: params.delegatedUserToken,
   });
 }
 
 export async function fetchAuthorRegistryTrust(config: EnvConfig) {
-  const [rootJwks, revocations] = await Promise.all([
+  const [trustAnchor, revocations] = await Promise.all([
     registryRequest<Record<string, unknown>>({
       config,
-      path: "/v1/root/jwks",
+      path: "/v1/trust-anchor",
       authenticated: false,
     }),
     registryRequest<Record<string, unknown>>({
@@ -127,6 +144,37 @@ export async function fetchAuthorRegistryTrust(config: EnvConfig) {
       authenticated: false,
     }),
   ]);
-  return { rootJwks, revocations };
+  const rootJwks = (trustAnchor["root_jwks"] ?? {}) as Record<string, unknown>;
+  return { trustAnchor, rootJwks, revocations };
 }
 
+export async function fetchRegistryDashboard(config: EnvConfig, delegatedUserToken: string) {
+  return registryRequest<Record<string, unknown>>({ config, path: "/v1/admin/dashboard", delegatedUserToken });
+}
+
+export async function fetchRegistryAuthors(config: EnvConfig, delegatedUserToken: string) {
+  return registryRequest<{ items: Array<Record<string, unknown>> }>({ config, path: "/v1/admin/authors", delegatedUserToken });
+}
+
+export async function updateRegistryAuthor(config: EnvConfig, delegatedUserToken: string, authorId: string, action: "approve" | "suspend" | "revoke", reason?: string) {
+  if (action === "revoke") return registryRequest<Record<string, unknown>>({
+    config, path: `/v1/admin/authors/${encodeURIComponent(authorId)}/revoke`, method: "POST",
+    body: { reason: reason ?? "Revoked by registry operator" }, delegatedUserToken,
+  });
+  return registryRequest<Record<string, unknown>>({
+    config, path: `/v1/admin/authors/${encodeURIComponent(authorId)}/status`, method: "POST",
+    body: { status: action === "approve" ? "active" : "suspended", notes: reason }, delegatedUserToken,
+  });
+}
+
+export async function fetchRegistryAudit(config: EnvConfig, delegatedUserToken: string) {
+  return registryRequest<{ items: Array<Record<string, unknown>> }>({ config, path: "/v1/admin/audit", delegatedUserToken });
+}
+
+export async function fetchRegistryAuthorDetail(config: EnvConfig, delegatedUserToken: string, authorId: string) {
+  return registryRequest<Record<string, unknown>>({ config, path: `/v1/admin/authors/${encodeURIComponent(authorId)}`, delegatedUserToken });
+}
+
+export async function mutateRegistryLifecycle(config: EnvConfig, delegatedUserToken: string, path: string, method: "POST" | "DELETE", body?: unknown) {
+  return registryRequest<Record<string, unknown>>({ config, path, method, body, delegatedUserToken });
+}

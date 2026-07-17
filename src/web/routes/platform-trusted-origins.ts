@@ -79,6 +79,20 @@ export async function registerPlatformTrustedOriginsRoutes(app: FastifyInstance)
     return reply.send(updated);
   });
 
+  app.post("/platform/trusted-origins/:id/test", async (request, reply) => {
+    await requireUserAuth(request, app.config);
+    requirePlatformConfigManage(request);
+    const item = await getTrustedOriginsStore().get((request.params as { id: string }).id);
+    if (!item) throw new NotFoundError("Trusted origin not found");
+    const started = Date.now();
+    try {
+      const response = await fetch(item.origin, { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(5000) });
+      return reply.send({ reachable: true, status_code: response.status, latency_ms: Date.now() - started, checked_at: new Date().toISOString() });
+    } catch (error) {
+      return reply.send({ reachable: false, status_code: null, latency_ms: Date.now() - started, checked_at: new Date().toISOString(), error: error instanceof Error ? error.message : "Connection failed" });
+    }
+  });
+
   app.delete("/platform/trusted-origins/:id", async (request, reply) => {
     await requireUserAuth(request, app.config);
     requirePlatformConfigManage(request);

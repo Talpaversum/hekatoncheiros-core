@@ -56,6 +56,14 @@ function mapRow(row: Record<string, unknown>): TrustedOrigin {
 }
 
 export class TrustedOriginsStore {
+  async get(id: string): Promise<TrustedOrigin | null> {
+    const result = await getPool().query(
+      `select id, origin, is_enabled, note, created_at, created_by from core.trusted_origins where id = $1`,
+      [id],
+    );
+    return result.rowCount ? mapRow(result.rows[0]) : null;
+  }
+
   async list(): Promise<TrustedOrigin[]> {
     const pool = getPool();
     const result = await pool.query(

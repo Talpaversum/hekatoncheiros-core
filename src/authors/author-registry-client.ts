@@ -7,7 +7,7 @@ function registryBaseUrl(config: EnvConfig): URL {
     throw new Error("Author registry integration is not configured");
   }
   const url = new URL(config.AUTHOR_REGISTRY_URL);
-  if (url.protocol !== "https:" && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+  if (url.protocol !== "https:" && !config.AUTHOR_REGISTRY_ALLOW_HTTP && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
     throw new Error("AUTHOR_REGISTRY_URL must use HTTPS outside localhost");
   }
   return new URL(url.origin);
@@ -69,6 +69,7 @@ export async function onboardAuthor(params: {
   displayName: string;
   jwks: PublicJwks;
   ttlDays: number;
+  operatingMode: "talpaversum_hosted" | "trusted_self_hosted";
   delegatedUserToken?: string;
 }) {
   assertPublicJwks(params.jwks);
@@ -76,7 +77,7 @@ export async function onboardAuthor(params: {
     config: params.config,
     path: "/v1/authors",
     method: "POST",
-    body: { display_name: params.displayName },
+    body: { display_name: params.displayName, operating_mode: params.operatingMode },
     delegatedUserToken: params.delegatedUserToken,
   });
   await registryRequest({

@@ -35,8 +35,10 @@ const envSchema = z.object({
     .transform((value) => value === "true" || value === "1"),
   APP_CATALOG_AUTO_REFRESH_INTERVAL_SECONDS: z.coerce.number().int().min(60).default(300),
   AUTHOR_REGISTRY_URL: z.string().default(""),
+  AUTHOR_REGISTRY_ALLOW_HTTP: z.string().default("false").transform((value) => value === "true" || value === "1"),
   AUTHOR_REGISTRY_ADMIN_TOKEN: z.string().default(""),
   AUTHOR_REGISTRY_APP_ID: z.string().default("hekatoncheiros/author-registry"),
+  AUTHOR_GIT_TOKEN_ENCRYPTION_KEY: z.string().optional(),
   AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(365),
   AUDIT_RETENTION_BATCH_SIZE: z.coerce.number().int().min(1).max(10000).default(1000),
 });

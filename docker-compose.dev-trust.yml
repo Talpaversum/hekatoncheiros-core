@@ -1,0 +1,12 @@
+# DEVELOPMENT ONLY. Never use these identities or HTTP trust settings in production.
+services:
+  core:
+    environment: &dev-trust-environment
+      LICENSING_DCR_SIGNING_PRIVATE_JWK_JSON: '{"crv":"Ed25519","d":"mchE5ugc4YJhz7c0Cbj90xrDzOeXmr1HVWTyySXN3Mw","x":"_JcWsaNy1P6RDkQFr1YkXLolymUudLI7VmV48yvWWBA","kty":"OKP","kid":"core-dcr-dev-1","alg":"EdDSA","use":"sig"}'
+      LICENSING_DCR_SIGNING_PUBLIC_JWK_JSON: '{"crv":"Ed25519","x":"_JcWsaNy1P6RDkQFr1YkXLolymUudLI7VmV48yvWWBA","kty":"OKP","kid":"core-dcr-dev-1","alg":"EdDSA","use":"sig"}'
+      AUTHOR_REGISTRY_URL: http://author-registry:4020
+      AUTHOR_REGISTRY_ALLOW_HTTP: "true"
+      AUTHOR_GIT_TOKEN_ENCRYPTION_KEY: development-only-author-git-key-change-me
+
+  core-seed:
+    environment: *dev-trust-environment

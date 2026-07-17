@@ -70,6 +70,7 @@ export async function registerAuthorRoutes(app: FastifyInstance) {
       const issued = await onboardAuthor({
         config: app.config,
         displayName: parsed.display_name,
+        operatingMode: "trusted_self_hosted",
         jwks: parsed.jwks,
         ttlDays: parsed.cert_ttl_days,
         delegatedUserToken: await registryDelegation(app, request),

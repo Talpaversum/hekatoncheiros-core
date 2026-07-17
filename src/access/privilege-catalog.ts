@@ -33,6 +33,18 @@ export const PRIVILEGE_CATALOG: PrivilegeDefinition[] = [
     scope: "platform",
   },
   {
+    id: "platform.catalog.manage",
+    label: "Manage official catalog",
+    description: "Review, publish, unpublish, and revoke official catalog submissions.",
+    scope: "platform",
+  },
+  {
+    id: "platform.author_registry.manage",
+    label: "Manage author registry integration",
+    description: "Configure and operate the platform connection to the official Author Registry.",
+    scope: "platform",
+  },
+  {
     id: "author_registry.admin",
     label: "Administer author registry",
     description: "Manage authors, public keys, certificates, and registry policy.",

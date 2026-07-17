@@ -5,6 +5,7 @@ import type { EnvConfig } from "../src/config/index.js";
 
 const config = {
   AUTHOR_REGISTRY_URL: "https://registry.example",
+  AUTHOR_REGISTRY_ALLOW_HTTP: false,
   AUTHOR_REGISTRY_ADMIN_TOKEN: "registry-admin-token",
 } as EnvConfig;
 
@@ -24,6 +25,7 @@ describe("author registry client", () => {
       onboardAuthor({
         config,
         displayName: "Example",
+        operatingMode: "trusted_self_hosted",
         jwks: { keys: [{ kty: "OKP", crv: "Ed25519", x: "public", kid: "author-1" }] },
         ttlDays: 365,
       }),
@@ -49,6 +51,7 @@ describe("author registry client", () => {
       onboardAuthor({
         config,
         displayName: "Example",
+        operatingMode: "trusted_self_hosted",
         jwks: { keys: [{ kty: "OKP", kid: "author-1", x: "public", d: "private" }] },
         ttlDays: 365,
       }),

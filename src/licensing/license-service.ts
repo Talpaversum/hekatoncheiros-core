@@ -17,6 +17,7 @@ import { getPool } from "../db/pool.js";
 import { HttpError, NotFoundError } from "../shared/errors.js";
 
 import { assertAuthorScopedAppId, isValidAuthorScopedAppId } from "./app-id.js";
+import { verifyLicenseSignatureChain } from "./license-signature-chain.js";
 import { getPlatformInstanceAudienceId } from "./platform-instance-service.js";
 
 export type LicenseStatus = "active" | "invalid" | "expired" | "revoked" | "disabled";
@@ -185,7 +186,7 @@ function toArray(value: unknown): string[] {
 }
 
 async function loadTrustState(): Promise<{
-  jwks: ReturnType<typeof createLocalJWKSet>;
+  rootJwks: JSONWebKeySet;
   registryId: string | null;
   revocations: Record<string, unknown>;
 }> {
@@ -199,14 +200,14 @@ async function loadTrustState(): Promise<{
       if (result.rowCount) {
         const anchor = (result.rows[0].trust_anchor_json ?? {}) as Record<string, unknown>;
         return {
-          jwks: createLocalJWKSet(result.rows[0].root_jwks_json as JSONWebKeySet),
+          rootJwks: result.rows[0].root_jwks_json as JSONWebKeySet,
           registryId: typeof anchor["registry_id"] === "string" ? anchor["registry_id"] : null,
           revocations: (result.rows[0].revocations_json ?? {}) as Record<string, unknown>,
         };
       }
     }
     const parsed = JSON.parse(config.LICENSING_ROOT_JWKS_JSON) as JSONWebKeySet;
-    return { jwks: createLocalJWKSet(parsed), registryId: null, revocations: {} };
+    return { rootJwks: parsed, registryId: null, revocations: {} };
   } catch {
     throw new HttpError(500, "Invalid licensing trust configuration");
   }
@@ -292,44 +293,20 @@ async function verifyLicenseMaterial(input: ImportLicenseInput): Promise<{
   }
 
   const trust = await loadTrustState();
-  const certHeader = decodeProtectedHeader(input.author_cert_jws);
-  const certVerified = await jwtVerify(input.author_cert_jws, trust.jwks, {
-    issuer: "hc-author-registry",
-    clockTolerance: config.LICENSING_CLOCK_SKEW_SECONDS,
-  });
-
-  const certPayload = certVerified.payload;
-  const certType = certPayload["typ"];
-  if (certType !== "hc-author-cert") {
-    throw new HttpError(400, "Invalid author cert typ");
+  let chain;
+  try {
+    chain = await verifyLicenseSignatureChain({
+      rootJwks: trust.rootJwks,
+      registryIssuer: "hc-author-registry",
+      registryId: trust.registryId,
+      authorCertJws: input.author_cert_jws,
+      licenseJws: input.license_jws,
+      clockToleranceSeconds: config.LICENSING_CLOCK_SKEW_SECONDS,
+    });
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "Invalid license signature chain");
   }
-  if (trust.registryId && certPayload["registry_id"] !== trust.registryId) {
-    throw new HttpError(400, "Author certificate registry_id does not match the trusted registry");
-  }
-
-  const authorId = requireStringClaim(certPayload, "sub");
-  const embeddedJwks = certPayload["jwks"] as { keys?: JWK[] } | undefined;
-  if (!embeddedJwks || !Array.isArray(embeddedJwks.keys) || embeddedJwks.keys.length === 0) {
-    throw new HttpError(400, "Author cert does not contain embedded jwks.keys");
-  }
-
-  const authorJwks = createLocalJWKSet({ keys: embeddedJwks.keys } as JSONWebKeySet);
-  const licenseVerified = await jwtVerify(input.license_jws, authorJwks, {
-    clockTolerance: config.LICENSING_CLOCK_SKEW_SECONDS,
-  });
-
-  const licensePayload = licenseVerified.payload;
-  const header = decodeProtectedHeader(input.license_jws);
-  const authorKid = typeof header.kid === "string" ? header.kid : null;
-  const licenseTyp = licensePayload["typ"];
-  if (licenseTyp !== "hc-license") {
-    throw new HttpError(400, "Invalid license typ");
-  }
-
-  const iss = requireStringClaim(licensePayload, "iss");
-  if (iss !== authorId) {
-    throw new HttpError(400, "license.iss must match author cert sub");
-  }
+  const { authorId, authorKid, rootKid, licensePayload } = chain;
 
   const subject = (licensePayload["subject"] ?? {}) as Record<string, unknown>;
   const scopeType = subject["scope_type"];
@@ -358,7 +335,7 @@ async function verifyLicenseMaterial(input: ImportLicenseInput): Promise<{
   const audience = toArray(licensePayload.aud);
   assertLicenseAudience(mode, audience, hcpi);
 
-  const revoked = await isRevoked(authorId, authorKid, typeof certHeader.kid === "string" ? certHeader.kid : null, jti, trust.revocations);
+  const revoked = await isRevoked(authorId, authorKid, rootKid, jti, trust.revocations);
   const status = getLicenseStatus({ payload: licensePayload, revoked, invalid: false });
 
   return {

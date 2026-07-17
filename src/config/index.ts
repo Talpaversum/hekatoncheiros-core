@@ -37,6 +37,7 @@ const envSchema = z.object({
   AUTHOR_REGISTRY_URL: z.string().default(""),
   AUTHOR_REGISTRY_ALLOW_HTTP: z.string().default("false").transform((value) => value === "true" || value === "1"),
   AUTHOR_REGISTRY_ADMIN_TOKEN: z.string().default(""),
+  INSTANCE_CAPABILITIES_JSON: z.string().default("{}"),
   AUTHOR_REGISTRY_APP_ID: z.string().default("hekatoncheiros/author-registry"),
   AUTHOR_GIT_TOKEN_ENCRYPTION_KEY: z.string().optional(),
   AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(365),

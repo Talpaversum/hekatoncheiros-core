@@ -51,7 +51,8 @@ export async function buildApp() {
   app.setErrorHandler((error, _request, reply) => {
     if (typeof error === "object" && error && "statusCode" in error) {
       const typed = error as { statusCode: number; message: string };
-      return reply.status(typed.statusCode).send({ message: typed.message });
+      const details = "details" in typed ? (typed as { details?: Record<string, unknown> }).details : undefined;
+      return reply.status(typed.statusCode).send({ message: typed.message, ...(details ?? {}) });
     }
     app.log.error(error);
     return reply.status(500).send({ message: "Internal Server Error" });

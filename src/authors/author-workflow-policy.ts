@@ -6,6 +6,7 @@ export const AUTHOR_PERMISSIONS = [
   "author.members.manage",
   "author.git.manage",
   "author.apps.create",
+  "author.apps.read",
   "author.apps.manage",
   "author.apps.submit",
   "author.apps.publish",
@@ -19,10 +20,10 @@ export type AuthorRole = "owner" | "manager" | "developer" | "licensing" | "view
 
 export const AUTHOR_ROLE_PERMISSIONS: Record<AuthorRole, AuthorPermission[]> = {
   owner: [...AUTHOR_PERMISSIONS],
-  manager: ["author.profile.manage", "author.members.manage", "author.git.manage", "author.apps.create", "author.apps.manage", "author.apps.submit", "author.apps.publish", "author.licensing.manage", "author.audit.read"],
-  developer: ["author.git.manage", "author.apps.create", "author.apps.manage", "author.apps.submit", "author.audit.read"],
-  licensing: ["author.licensing.manage", "author.licensing.issue", "author.licensing.revoke", "author.audit.read"],
-  viewer: ["author.audit.read"],
+  manager: ["author.profile.manage", "author.members.manage", "author.git.manage", "author.apps.create", "author.apps.read", "author.apps.manage", "author.apps.submit", "author.apps.publish", "author.licensing.manage", "author.audit.read"],
+  developer: ["author.git.manage", "author.apps.create", "author.apps.read", "author.apps.manage", "author.apps.submit", "author.audit.read"],
+  licensing: ["author.apps.read", "author.licensing.manage", "author.licensing.issue", "author.licensing.revoke", "author.audit.read"],
+  viewer: ["author.apps.read", "author.audit.read"],
 };
 
 export function policyForMode(mode: AuthorOperatingMode) {

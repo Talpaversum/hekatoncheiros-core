@@ -45,6 +45,7 @@ function testConfig(): EnvConfig {
   AUTHOR_REGISTRY_APP_ID: "hekatoncheiros/author-registry",
     AUDIT_RETENTION_DAYS: 365,
     AUDIT_RETENTION_BATCH_SIZE: 1000,
+    INSTANCE_CAPABILITIES_JSON: "{}",
   };
 }
 

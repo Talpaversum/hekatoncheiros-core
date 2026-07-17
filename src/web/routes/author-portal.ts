@@ -22,6 +22,7 @@ import {
   type AuthorRole,
 } from "../../authors/author-workflow-policy.js";
 import { getPool } from "../../db/pool.js";
+import { requireInstanceCapability, resolveInstanceCapabilities } from "../../platform/instance-capabilities.js";
 import { ForbiddenError, HttpError, NotFoundError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 
@@ -119,12 +120,14 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
         author_review: hasPlatformPrivilege(request, "platform.authors.manage"),
         catalog_review: hasPlatformPrivilege(request, "platform.catalog.manage"),
         runtime_review: hasPlatformPrivilege(request, "platform.apps.runtime.manage"),
+        instance: resolveInstanceCapabilities(app.config),
       },
     });
   });
 
   app.post("/author-portal/requests", async (request, reply) => {
     await requireUserAuth(request, app.config);
+    requireInstanceCapability(app.config, "officialAuthorOnboarding");
     const body = requestSchema.parse(request.body);
     const requestId = id("arq");
     const result = await getPool().query(
@@ -137,7 +140,7 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
   });
 
   app.put("/author-portal/requests/:id", async (request, reply) => {
-    await requireUserAuth(request, app.config); const body = requestSchema.parse(request.body); const requestId = (request.params as { id: string }).id;
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialAuthorOnboarding"); const body = requestSchema.parse(request.body); const requestId = (request.params as { id: string }).id;
     const result = await getPool().query(
       `update core.author_requests set requested_display_name=$3,legal_name=$4,contact_email=$5,website=$6,git_provider_profile=$7,description=$8,operating_mode=$9,intended_distribution=$10,terms_accepted=$11,public_jwks_json=$12::jsonb,external_issuer_url=$13,updated_at=now()
        where request_id=$1 and requester_user_id=$2 and status in ('draft','needs_changes','rejected') returning *`,
@@ -148,7 +151,7 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
   });
 
   app.post("/author-portal/requests/:id/submit", async (request, reply) => {
-    await requireUserAuth(request, app.config); const requestId = (request.params as { id: string }).id;
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialAuthorOnboarding"); const requestId = (request.params as { id: string }).id;
     const current = await getPool().query("select * from core.author_requests where request_id=$1 and requester_user_id=$2", [requestId, request.requestContext.actor.userId]);
     if (!current.rowCount) throw new NotFoundError("Author request not found");
     const row = current.rows[0];
@@ -160,12 +163,12 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
   });
 
   app.get("/author-portal/admin/requests", async (request, reply) => {
-    await requireUserAuth(request, app.config); if (!hasPlatformPrivilege(request, "platform.authors.manage")) throw new ForbiddenError();
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialAuthorRegistry"); if (!hasPlatformPrivilege(request, "platform.authors.manage")) throw new ForbiddenError();
     return reply.send({ items: (await getPool().query("select * from core.author_requests order by created_at desc")).rows });
   });
 
   app.post("/author-portal/admin/requests/:id/action", async (request, reply) => {
-    await requireUserAuth(request, app.config); if (!hasPlatformPrivilege(request, "platform.authors.manage")) throw new ForbiddenError();
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialAuthorRegistry"); if (!hasPlatformPrivilege(request, "platform.authors.manage")) throw new ForbiddenError();
     const requestId = (request.params as { id: string }).id;
     const body = z.object({ action: z.enum(["start_review", "request_changes", "approve", "reject", "suspend", "revoke"]), notes: z.string().max(3000).optional() }).parse(request.body);
     const found = await getPool().query("select * from core.author_requests where request_id=$1", [requestId]); if (!found.rowCount) throw new NotFoundError("Author request not found");
@@ -237,7 +240,8 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
 
   app.get("/author-portal/git-connections", async (request, reply) => {
     await requireUserAuth(request, app.config);
-    const result = await getPool().query(`select c.connection_id,c.author_id,c.provider,c.account_login,c.status,c.metadata_json,c.last_verified_at,c.created_at from core.author_git_connections c join core.author_memberships m on m.author_id=c.author_id where m.user_id=$1 and m.status='active' order by c.created_at desc`, [request.requestContext.actor.userId]);
+    const authorId = z.string().optional().parse((request.query as { author_id?: string }).author_id); if (authorId) await requireAuthorPermission(request, authorId, "author.audit.read");
+    const result = await getPool().query(`select c.connection_id,c.author_id,c.provider,c.account_login,c.status,c.metadata_json,c.last_verified_at,c.created_at from core.author_git_connections c join core.author_memberships m on m.author_id=c.author_id where m.user_id=$1 and m.status='active' and ($2::text is null or c.author_id=$2) order by c.created_at desc`, [request.requestContext.actor.userId, authorId ?? null]);
     return reply.send({ items: result.rows });
   });
 
@@ -263,10 +267,14 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
 
   app.get("/author-portal/apps", async (request, reply) => {
     await requireUserAuth(request, app.config);
-    const operator = hasPlatformPrivilege(request, "platform.catalog.manage") || hasPlatformPrivilege(request, "platform.apps.runtime.manage");
+    const query = z.object({ scope: z.enum(["workspace", "registry"]).optional(), author_id: z.string().optional() }).parse(request.query);
+    const operator = query.scope === "registry" && (hasPlatformPrivilege(request, "platform.catalog.manage") || hasPlatformPrivilege(request, "platform.apps.runtime.manage"));
+    if (query.scope === "registry") requireInstanceCapability(app.config, "officialAuthorRegistry");
+    if (query.scope === "registry" && !operator) throw new ForbiddenError();
+    if (query.author_id) await requireAuthorPermission(request, query.author_id, "author.audit.read");
     const result = operator
       ? await getPool().query(`select a.*,p.operating_mode,coalesce(m.permissions_json,'[]'::jsonb) as member_permissions_json from core.author_apps a join core.author_profiles p on p.author_id=a.author_id left join core.author_memberships m on m.author_id=a.author_id and m.user_id=$1 and m.status='active' order by a.created_at desc`, [request.requestContext.actor.userId])
-      : await getPool().query(`select a.*,p.operating_mode,m.permissions_json as member_permissions_json from core.author_apps a join core.author_profiles p on p.author_id=a.author_id join core.author_memberships m on m.author_id=a.author_id where m.user_id=$1 and m.status='active' order by a.created_at desc`, [request.requestContext.actor.userId]);
+      : await getPool().query(`select a.*,p.operating_mode,m.permissions_json as member_permissions_json from core.author_apps a join core.author_profiles p on p.author_id=a.author_id join core.author_memberships m on m.author_id=a.author_id where m.user_id=$1 and m.status='active' and ($2::text is null or a.author_id=$2) order by a.created_at desc`, [request.requestContext.actor.userId, query.author_id ?? null]);
     return reply.send({ items: result.rows });
   });
 
@@ -287,6 +295,8 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
     const found = await getPool().query(`select a.*,p.operating_mode from core.author_apps a join core.author_profiles p on p.author_id=a.author_id where a.author_app_id=$1`, [authorAppId]); if (!found.rowCount) throw new NotFoundError("Author application not found"); const row = found.rows[0]; const from = String(row.status);
     const catalogAction = ["approve", "reject"].includes(body.action);
     const runtimeAction = ["approve_runtime", "mark_running", "disable"].includes(body.action);
+    if (catalogAction) requireInstanceCapability(app.config, "officialCatalogReview");
+    if (body.action === "request_runtime" || runtimeAction) requireInstanceCapability(app.config, "hostedRuntime");
     if (catalogAction && !hasPlatformPrivilege(request, "platform.catalog.manage")) throw new ForbiddenError();
     if (runtimeAction && !hasPlatformPrivilege(request, "platform.apps.runtime.manage")) throw new ForbiddenError();
     if (!catalogAction && !runtimeAction) await requireAuthorPermission(request, String(row.author_id), "author.apps.submit");
@@ -296,18 +306,18 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
   });
 
   app.post("/author-portal/apps/:id/catalog-submission", async (request, reply) => {
-    await requireUserAuth(request, app.config); const authorAppId = (request.params as { id: string }).id; const found = await getPool().query(`select a.*,p.operating_mode,p.registry_status from core.author_apps a join core.author_profiles p on p.author_id=a.author_id where a.author_app_id=$1`, [authorAppId]); if (!found.rowCount) throw new NotFoundError("Author application not found"); const row = found.rows[0]; await requireAuthorPermission(request, String(row.author_id), "author.apps.publish");
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialCatalogPublishing"); const authorAppId = (request.params as { id: string }).id; const found = await getPool().query(`select a.*,p.operating_mode,p.registry_status from core.author_apps a join core.author_profiles p on p.author_id=a.author_id where a.author_app_id=$1`, [authorAppId]); if (!found.rowCount) throw new NotFoundError("Author application not found"); const row = found.rows[0]; await requireAuthorPermission(request, String(row.author_id), "author.apps.publish");
     const policy = policyForMode(row.operating_mode as AuthorOperatingMode); const eligibility = { official_catalog_eligible: policy.officialCatalogEligible, registry_active: row.registry_status === "active", manifest_valid: (row.manifest_errors_json as unknown[]).length === 0, app_approved: ["approved", "runtime_approved", "running", "published"].includes(String(row.status)) };
     if (!Object.values(eligibility).every(Boolean)) throw new HttpError(409, "Application is not eligible for official catalog submission", eligibility);
     const submissionId = id("sub"); const result = await getPool().query(`insert into core.catalog_submissions(submission_id,author_app_id,author_id,status,eligibility_json,submitted_by,submitted_at) values($1,$2,$3,'submitted',$4::jsonb,$5,now()) returning *`, [submissionId, authorAppId, row.author_id, JSON.stringify(eligibility), request.requestContext.actor.userId]); await workflowEvent(request, { authorId: String(row.author_id), appId: authorAppId, submissionId, action: "author.catalog.submitted", to: "submitted", metadata: eligibility }); return reply.code(201).send(result.rows[0]);
   });
 
   app.get("/author-portal/catalog-submissions", async (request, reply) => {
-    await requireUserAuth(request, app.config); const operator = hasPlatformPrivilege(request, "platform.catalog.manage"); const result = operator ? await getPool().query(`select s.*,a.display_name,a.app_id,p.operating_mode from core.catalog_submissions s join core.author_apps a on a.author_app_id=s.author_app_id join core.author_profiles p on p.author_id=s.author_id order by s.created_at desc`) : await getPool().query(`select s.*,a.display_name,a.app_id,p.operating_mode from core.catalog_submissions s join core.author_apps a on a.author_app_id=s.author_app_id join core.author_profiles p on p.author_id=s.author_id join core.author_memberships m on m.author_id=s.author_id where m.user_id=$1 and m.status='active' order by s.created_at desc`, [request.requestContext.actor.userId]); return reply.send({ items: result.rows, operator });
+    await requireUserAuth(request, app.config); const query = z.object({ scope: z.enum(["workspace", "registry"]).optional(), author_id: z.string().optional() }).parse(request.query); const operator = query.scope === "registry" && hasPlatformPrivilege(request, "platform.catalog.manage"); if (query.scope === "registry") requireInstanceCapability(app.config, "officialCatalogReview"); if (query.scope === "registry" && !operator) throw new ForbiddenError(); if (query.author_id) await requireAuthorPermission(request, query.author_id, "author.apps.read"); const result = operator ? await getPool().query(`select s.*,a.display_name,a.app_id,p.operating_mode from core.catalog_submissions s join core.author_apps a on a.author_app_id=s.author_app_id join core.author_profiles p on p.author_id=s.author_id order by s.created_at desc`) : await getPool().query(`select s.*,a.display_name,a.app_id,p.operating_mode from core.catalog_submissions s join core.author_apps a on a.author_app_id=s.author_app_id join core.author_profiles p on p.author_id=s.author_id join core.author_memberships m on m.author_id=s.author_id where m.user_id=$1 and m.status='active' and ($2::text is null or s.author_id=$2) order by s.created_at desc`, [request.requestContext.actor.userId, query.author_id ?? null]); return reply.send({ items: result.rows, operator });
   });
 
   app.post("/author-portal/admin/catalog-submissions/:id/action", async (request, reply) => {
-    await requireUserAuth(request, app.config); if (!hasPlatformPrivilege(request, "platform.catalog.manage")) throw new ForbiddenError(); const submissionId = (request.params as { id: string }).id; const body = z.object({ action: z.enum(["start_review", "request_changes", "approve", "reject", "publish", "unpublish"]), notes: z.string().max(3000).optional() }).parse(request.body); const found = await getPool().query("select * from core.catalog_submissions where submission_id=$1", [submissionId]); if (!found.rowCount) throw new NotFoundError("Catalog submission not found"); const row = found.rows[0]; const from = String(row.status); const target = { start_review: "pending_review", request_changes: "needs_changes", approve: "approved", reject: "rejected", publish: "published", unpublish: "unpublished" }[body.action]; assertWorkflowTransition("submission", from, target);
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialCatalogReview"); if (!hasPlatformPrivilege(request, "platform.catalog.manage")) throw new ForbiddenError(); const submissionId = (request.params as { id: string }).id; const body = z.object({ action: z.enum(["start_review", "request_changes", "approve", "reject", "publish", "unpublish"]), notes: z.string().max(3000).optional() }).parse(request.body); const found = await getPool().query("select * from core.catalog_submissions where submission_id=$1", [submissionId]); if (!found.rowCount) throw new NotFoundError("Catalog submission not found"); const row = found.rows[0]; const from = String(row.status); const target = { start_review: "pending_review", request_changes: "needs_changes", approve: "approved", reject: "rejected", publish: "published", unpublish: "unpublished" }[body.action]; assertWorkflowTransition("submission", from, target);
     const result = await getPool().query("update core.catalog_submissions set status=$2,review_notes=$3,reviewed_by=$4,reviewed_at=now(),published_at=case when $2='published' then now() else published_at end,updated_at=now() where submission_id=$1 returning *", [submissionId, target, body.notes ?? null, request.requestContext.actor.userId]); if (target === "published") await getPool().query("update core.author_apps set status='published',updated_at=now() where author_app_id=$1", [row.author_app_id]); await workflowEvent(request, { authorId: String(row.author_id), appId: String(row.author_app_id), submissionId, action: `author.catalog.${body.action}`, from, to: target, metadata: { notes: body.notes } }); return reply.send(result.rows[0]);
   });
 

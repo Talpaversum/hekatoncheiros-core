@@ -16,6 +16,7 @@ import {
   mutateRegistryLifecycle,
 } from "../../authors/author-registry-client.js";
 import { getPool } from "../../db/pool.js";
+import { requireInstanceCapability } from "../../platform/instance-capabilities.js";
 import { ForbiddenError, NotFoundError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 import { refreshStoredLicenseStatuses } from "../../licensing/license-service.js";
@@ -44,7 +45,8 @@ const keysSchema = z.object({
   cert_ttl_days: z.number().int().min(1).max(3650).default(365),
 });
 
-function requireAuthorManage(request: { requestContext: { privileges: string[] } }) {
+function requireAuthorManage(app: FastifyInstance, request: { requestContext: { privileges: string[] } }) {
+  requireInstanceCapability(app.config, "officialAuthorRegistry");
   if (!hasPrivilege(request.requestContext.privileges, "platform.authors.manage")) {
     throw new ForbiddenError();
   }
@@ -53,7 +55,7 @@ function requireAuthorManage(request: { requestContext: { privileges: string[] }
 export async function registerAuthorRoutes(app: FastifyInstance) {
   app.get("/platform/authors", async (request, reply) => {
     await requireUserAuth(request, app.config);
-    requireAuthorManage(request);
+    requireAuthorManage(app, request);
     const result = await getPool().query(
       `select author_id, display_name, public_jwks_json, author_cert_jws, root_kid,
               registry_url, created_by, created_at, updated_at
@@ -64,7 +66,7 @@ export async function registerAuthorRoutes(app: FastifyInstance) {
 
   app.post("/platform/authors/onboard", async (request, reply) => {
     await requireUserAuth(request, app.config);
-    requireAuthorManage(request);
+    requireAuthorManage(app, request);
     const parsed = onboardingSchema.parse(request.body);
     try {
       const issued = await onboardAuthor({
@@ -111,7 +113,7 @@ export async function registerAuthorRoutes(app: FastifyInstance) {
 
   app.post("/platform/authors/:author_id/keys", async (request, reply) => {
     await requireUserAuth(request, app.config);
-    requireAuthorManage(request);
+    requireAuthorManage(app, request);
     const authorId = (request.params as { author_id: string }).author_id;
     const parsed = keysSchema.parse(request.body);
     const existing = await getPool().query(
@@ -152,7 +154,7 @@ export async function registerAuthorRoutes(app: FastifyInstance) {
 
   app.post("/platform/author-registry/sync-trust", async (request, reply) => {
     await requireUserAuth(request, app.config);
-    requireAuthorManage(request);
+    requireAuthorManage(app, request);
     try {
       const snapshot = await fetchAuthorRegistryTrust(app.config);
       await getPool().query(
@@ -189,7 +191,7 @@ export async function registerAuthorRoutes(app: FastifyInstance) {
 
   app.get("/platform/author-registry/trust", async (request, reply) => {
     await requireUserAuth(request, app.config);
-    requireAuthorManage(request);
+    requireAuthorManage(app, request);
     const result = await getPool().query(
       `select registry_url, root_jwks_json, revocations_json, trust_anchor_json, synced_at, synced_by
          from core.author_registry_snapshots
@@ -203,41 +205,41 @@ export async function registerAuthorRoutes(app: FastifyInstance) {
   });
 
   app.get("/platform/author-registry/dashboard", async (request, reply) => {
-    await requireUserAuth(request, app.config); requireAuthorManage(request);
+    await requireUserAuth(request, app.config); requireAuthorManage(app, request);
     return reply.send(await fetchRegistryDashboard(app.config, await registryDelegation(app, request)));
   });
   app.get("/platform/author-registry/authors", async (request, reply) => {
-    await requireUserAuth(request, app.config); requireAuthorManage(request);
+    await requireUserAuth(request, app.config); requireAuthorManage(app, request);
     return reply.send(await fetchRegistryAuthors(app.config, await registryDelegation(app, request)));
   });
   app.post("/platform/author-registry/authors/:authorId/action", async (request, reply) => {
-    await requireUserAuth(request, app.config); requireAuthorManage(request);
+    await requireUserAuth(request, app.config); requireAuthorManage(app, request);
     const body = z.object({ action: z.enum(["approve", "suspend", "revoke"]), reason: z.string().max(500).optional() }).parse(request.body);
     const authorId = (request.params as { authorId: string }).authorId;
     return reply.send(await updateRegistryAuthor(app.config, await registryDelegation(app, request), authorId, body.action, body.reason));
   });
   app.get("/platform/author-registry/audit", async (request, reply) => {
-    await requireUserAuth(request, app.config); requireAuthorManage(request);
+    await requireUserAuth(request, app.config); requireAuthorManage(app, request);
     return reply.send(await fetchRegistryAudit(app.config, await registryDelegation(app, request)));
   });
   app.get("/platform/author-registry/authors/:authorId", async (request, reply) => {
-    await requireUserAuth(request, app.config); requireAuthorManage(request);
+    await requireUserAuth(request, app.config); requireAuthorManage(app, request);
     const authorId = (request.params as { authorId: string }).authorId;
     return reply.send(await fetchRegistryAuthorDetail(app.config, await registryDelegation(app, request), authorId));
   });
   app.delete("/platform/author-registry/authors/:authorId", async (request, reply) => {
-    await requireUserAuth(request, app.config); requireAuthorManage(request);
+    await requireUserAuth(request, app.config); requireAuthorManage(app, request);
     const authorId = (request.params as { authorId: string }).authorId;
     return reply.send(await mutateRegistryLifecycle(app.config, await registryDelegation(app, request), `/v1/admin/authors/${encodeURIComponent(authorId)}`, "DELETE"));
   });
   app.post("/platform/author-registry/authors/:authorId/keys/:kid/status", async (request, reply) => {
-    await requireUserAuth(request, app.config); requireAuthorManage(request);
+    await requireUserAuth(request, app.config); requireAuthorManage(app, request);
     const { authorId, kid } = request.params as { authorId: string; kid: string };
     const body = z.object({ revoke: z.boolean(), reason: z.string().max(500).optional() }).parse(request.body);
     return reply.send(await mutateRegistryLifecycle(app.config, await registryDelegation(app, request), `/v1/admin/authors/${encodeURIComponent(authorId)}/keys/${encodeURIComponent(kid)}/status`, "POST", body));
   });
   app.post("/platform/author-registry/certificates/:id/revoke", async (request, reply) => {
-    await requireUserAuth(request, app.config); requireAuthorManage(request);
+    await requireUserAuth(request, app.config); requireAuthorManage(app, request);
     const id = (request.params as { id: string }).id;
     const body = z.object({ reason: z.string().min(3).max(500) }).parse(request.body);
     return reply.send(await mutateRegistryLifecycle(app.config, await registryDelegation(app, request), `/v1/admin/certificates/${encodeURIComponent(id)}/revoke`, "POST", body));

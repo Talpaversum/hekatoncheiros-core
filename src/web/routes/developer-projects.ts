@@ -19,12 +19,12 @@ import { requireUserAuth } from "../plugins/auth-user.js";
 const projectSchema = z.object({
   display_name: z.string().trim().min(2).max(120),
   origin_url: z.string().url(),
-  source_type: z.enum(["manifest", "feed"]),
+  source_type: z.enum(["manifest", "private_feed"]),
   manifest_url: z.string().url().nullable().optional(),
   feed_url: z.string().url().nullable().optional(),
 }).superRefine((value, context) => {
   if (value.source_type === "manifest" && !value.manifest_url) context.addIssue({ code: "custom", path: ["manifest_url"], message: "Manifest URL is required" });
-  if (value.source_type === "feed" && !value.feed_url) context.addIssue({ code: "custom", path: ["feed_url"], message: "Feed URL is required" });
+  if (value.source_type === "private_feed" && !value.feed_url) context.addIssue({ code: "custom", path: ["feed_url"], message: "Feed URL is required" });
   const sourceUrl = value.source_type === "manifest" ? value.manifest_url : value.feed_url;
   if (sourceUrl && new URL(sourceUrl).origin !== new URL(value.origin_url).origin) context.addIssue({ code: "custom", path: [value.source_type === "manifest" ? "manifest_url" : "feed_url"], message: "Source URL must use the application origin" });
 });
@@ -34,7 +34,7 @@ type ProjectRow = Record<string, unknown>;
 function mapProject(row: ProjectRow) {
   return {
     project_id: String(row["project_id"]), tenant_id: String(row["tenant_id"]), created_by: String(row["created_by"]),
-    display_name: String(row["display_name"]), origin_url: String(row["origin_url"]), source_type: String(row["source_type"]),
+    display_name: String(row["display_name"]), origin_url: (row["origin_url"] as string | null) ?? null, source_type: String(row["source_type"]),
     manifest_url: (row["manifest_url"] as string | null) ?? null, feed_url: (row["feed_url"] as string | null) ?? null,
     status: String(row["status"]), connectivity_result_json: row["connectivity_result_json"] ?? null,
     manifest_result_json: row["manifest_result_json"] ?? null, trusted_origin_id: (row["trusted_origin_id"] as string | null) ?? null,
@@ -48,6 +48,7 @@ function mapProject(row: ProjectRow) {
     last_sync_at: row["last_sync_at"] ? new Date(String(row["last_sync_at"])).toISOString() : null,
     last_validation_at: row["last_validation_at"] ? new Date(String(row["last_validation_at"])).toISOString() : null,
     last_deployment_at: row["last_deployment_at"] ? new Date(String(row["last_deployment_at"])).toISOString() : null,
+    wizard_step: Number(row["wizard_step"]), wizard_state_json: row["wizard_state_json"] ?? {},
     created_at: new Date(String(row["created_at"])).toISOString(), updated_at: new Date(String(row["updated_at"])).toISOString(),
   };
 }
@@ -74,13 +75,28 @@ async function fetchProjectManifest(row: ProjectRow): Promise<FetchManifestResul
 }
 
 export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
+  app.post("/developer-projects/drafts", async (request, reply) => {
+    await prepare(request, app, "developer.projects.create");
+    const body = z.object({ source_type: z.enum(["github", "gitlab", "git", "local_workspace", "manifest", "private_feed"]), display_name: z.string().trim().min(2).max(120).optional() }).parse(request.body);
+    const projectId = `local_${randomUUID().replaceAll("-", "")}`;
+    const result = await getPool().query(`insert into core.local_app_projects(project_id,tenant_id,created_by,display_name,source_type,wizard_step,wizard_state_json) values($1,$2,$3,$4,$5,2,$6::jsonb) returning *`, [projectId, request.requestContext.tenant.tenantId, request.requestContext.actor.userId, body.display_name ?? "Untitled project", body.source_type, JSON.stringify({ source_type: body.source_type })]);
+    return reply.code(201).send(mapProject(result.rows[0]));
+  });
+
+  app.patch("/developer-projects/:id/draft", async (request, reply) => {
+    await prepare(request, app, "developer.projects.manage");
+    const projectId = (request.params as { id: string }).id; await findProject(request, projectId);
+    const body = z.object({ wizard_step: z.number().int().min(1).max(10), display_name: z.string().trim().min(2).max(120).optional(), origin_url: z.string().url().nullable().optional(), source_connection_id: z.string().max(160).nullable().optional(), repository: z.string().max(500).nullable().optional(), workspace_path: z.string().max(1000).nullable().optional(), branch: z.string().max(240).nullable().optional(), manifest_path: z.string().max(500).nullable().optional(), manifest_url: z.string().url().nullable().optional(), feed_url: z.string().url().nullable().optional(), runtime_type: z.enum(["dockerfile", "docker_compose", "external_runtime", "already_running_service"]).optional(), wizard_state_json: z.record(z.string(), z.unknown()).optional() }).parse(request.body);
+    const result = await getPool().query(`update core.local_app_projects set wizard_step=$3,display_name=coalesce($4,display_name),origin_url=coalesce($5,origin_url),source_connection_id=coalesce($6,source_connection_id),repository=coalesce($7,repository),workspace_path=coalesce($8,workspace_path),branch=coalesce($9,branch),manifest_path=coalesce($10,manifest_path),manifest_url=coalesce($11,manifest_url),feed_url=coalesce($12,feed_url),runtime_type=coalesce($13,runtime_type),wizard_state_json=coalesce($14::jsonb,wizard_state_json),updated_at=now() where project_id=$1 and tenant_id=$2 returning *`, [projectId, request.requestContext.tenant.tenantId, body.wizard_step, body.display_name, body.origin_url, body.source_connection_id, body.repository, body.workspace_path, body.branch, body.manifest_path, body.manifest_url, body.feed_url, body.runtime_type, body.wizard_state_json ? JSON.stringify(body.wizard_state_json) : null]);
+    return reply.send(mapProject(result.rows[0]));
+  });
   app.post("/developer-projects", async (request, reply) => {
     await prepare(request, app, "developer.projects.create"); const body = projectSchema.parse(request.body); const projectId = `local_${randomUUID().replaceAll("-", "")}`;
     const origin = normalizeTrustedOrigin(body.origin_url);
     const result = await getPool().query(
       `insert into core.local_app_projects(project_id,tenant_id,created_by,display_name,origin_url,source_type,manifest_url,feed_url)
        values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
-      [projectId, request.requestContext.tenant.tenantId, request.requestContext.actor.userId, body.display_name, origin, body.source_type, body.source_type === "manifest" ? body.manifest_url : null, body.source_type === "feed" ? body.feed_url : null],
+      [projectId, request.requestContext.tenant.tenantId, request.requestContext.actor.userId, body.display_name, origin, body.source_type, body.source_type === "manifest" ? body.manifest_url : null, body.source_type === "private_feed" ? body.feed_url : null],
     );
     return reply.code(201).send(mapProject(result.rows[0]));
   });
@@ -100,13 +116,14 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
     const result = await getPool().query(
       `update core.local_app_projects set display_name=$3,origin_url=$4,source_type=$5,manifest_url=$6,feed_url=$7,status='draft',connectivity_result_json=null,manifest_result_json=null,trusted_origin_id=null,installed_app_id=null,updated_at=now()
        where project_id=$1 and tenant_id=$2 returning *`,
-      [projectId, request.requestContext.tenant.tenantId, body.display_name, normalizeTrustedOrigin(body.origin_url), body.source_type, body.source_type === "manifest" ? body.manifest_url : null, body.source_type === "feed" ? body.feed_url : null],
+      [projectId, request.requestContext.tenant.tenantId, body.display_name, normalizeTrustedOrigin(body.origin_url), body.source_type, body.source_type === "manifest" ? body.manifest_url : null, body.source_type === "private_feed" ? body.feed_url : null],
     );
     return reply.send(mapProject(result.rows[0]));
   });
 
   app.post("/developer-projects/:id/test-origin", async (request, reply) => {
     await prepare(request, app, "developer.projects.manage"); const row = await findProject(request, (request.params as { id: string }).id); const started = Date.now(); let result: Record<string, unknown>;
+    if (!row["origin_url"]) throw new HttpError(409, "Project origin is required before connectivity testing");
     try { const response = await fetch(String(row["origin_url"]), { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(5000) }); result = { reachable: true, status_code: response.status, latency_ms: Date.now() - started, checked_at: new Date().toISOString() }; }
     catch (error) { result = { reachable: false, status_code: null, latency_ms: Date.now() - started, checked_at: new Date().toISOString(), error: error instanceof Error ? error.message : "Connection failed" }; }
     const updated = await getPool().query("update core.local_app_projects set status=$3,connectivity_result_json=$4::jsonb,updated_at=now() where project_id=$1 and tenant_id=$2 returning *", [row["project_id"], row["tenant_id"], result["reachable"] ? "connectivity_ok" : "connectivity_failed", JSON.stringify(result)]);
@@ -131,11 +148,11 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
       if (row["source_type"] === "manifest") {
         const fetched = await fetchManifestFromUrl(String(row["manifest_url"]), { isTrustedOrigin: trusted });
         validation = { valid: true, errors: [], selected: { app_id: fetched.manifest["app_id"], app_name: fetched.manifest["app_name"], base_url: fetched.normalizedBaseUrl, manifest_url: fetched.fetchedFromUrl, manifest_hash: fetched.manifestHash, manifest: fetched.manifest } };
-      } else {
+      } else if (row["source_type"] === "private_feed") {
         const source = await getAppCatalogStore().createFeedSource({ name: `Private project: ${row["display_name"]}`, feedUrl: String(row["feed_url"]), trustMode: "dev", createdBy: request.requestContext.actor.userId });
         const synced = await syncCatalogFeedSource({ source, actorUserId: request.requestContext.actor.userId, config: app.config, isTrustedOrigin: trusted });
         const first = synced.items[0]; validation = { valid: synced.errors.length === 0 && Boolean(first), errors: synced.errors.map((error) => error.message), feed: { total: synced.total, imported: synced.imported }, selected: first ? { app_id: first.app_id, app_name: first.app_name, base_url: first.base_url, manifest_url: first.manifest_url, manifest_hash: first.manifest_hash } : null };
-      }
+      } else throw new HttpError(409, "Synchronize the repository or workspace source before manifest validation");
     } catch (error) { validation = { valid: false, errors: [error instanceof Error ? error.message : "Source validation failed"] }; }
     const selected = validation["selected"] as { manifest_hash?: string } | undefined;
     const updated = await getPool().query("update core.local_app_projects set status=$3,manifest_result_json=$4::jsonb,manifest_hash=$5,validated_revision=source_revision,last_validation_at=now(),update_status=$6,updated_at=now() where project_id=$1 and tenant_id=$2 returning *", [row["project_id"], row["tenant_id"], validation["valid"] ? "source_valid" : "source_invalid", JSON.stringify(validation), selected?.manifest_hash ?? null, validation["valid"] ? "deployment_required" : "validation_failed"]);

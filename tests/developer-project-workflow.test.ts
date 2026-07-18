@@ -68,6 +68,13 @@ describe("private developer project workflow", () => {
     const token = await new SignJWT({ tenant_id: tenantId }).setProtectedHeader({ alg: "HS256" }).setSubject(userId).setIssuer("hekatoncheiros-core").setAudience("hc-user").setIssuedAt().setExpirationTime("5m").sign(new TextEncoder().encode(process.env["JWT_SECRET"]));
     const request = async (method: "GET" | "POST", url: string, payload?: object) => app.inject({ method, url: `/api/v1${url}`, headers: { authorization: `Bearer ${token}` }, payload });
 
+    const draft = await request("POST", "/developer-projects/drafts", { display_name: "Local Test Project", source_type: "manifest" });
+    expect(draft.statusCode).toBe(201);
+    expect(draft.json()).toMatchObject({ status: "draft", wizard_step: 2 });
+    const draftId = (draft.json() as { project_id: string }).project_id;
+    expect((await request("PATCH" as "POST", `/developer-projects/${draftId}/draft`, { wizard_step: 3, origin_url: origin, manifest_url: `${origin}/manifest.json`, wizard_state_json: { source_checked: true } })).statusCode).toBe(200);
+    await getPool().query("delete from core.local_app_projects where project_id=$1", [draftId]);
+
     const created = await request("POST", "/developer-projects", { display_name: "Local Test Project", origin_url: origin, source_type: "manifest", manifest_url: `${origin}/manifest.json`, feed_url: null });
     expect(created.statusCode).toBe(201);
     const projectId = (created.json() as { project_id: string }).project_id;

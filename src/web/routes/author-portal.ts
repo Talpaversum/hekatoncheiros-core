@@ -49,13 +49,12 @@ function hasPlatformPrivilege(request: FastifyRequest, privilege: string) {
 }
 
 async function requireAuthorPermission(request: FastifyRequest, authorId: string, permission: AuthorPermission) {
-  if (hasPrivilege(request.requestContext.privileges, "platform.superadmin")) return;
   const result = await getPool().query(
     "select permissions_json from core.author_memberships where author_id=$1 and user_id=$2 and status='active'",
     [authorId, request.requestContext.actor.userId],
   );
   const permissions = (result.rows[0]?.permissions_json ?? []) as string[];
-  if (!permissions.includes(permission)) throw new ForbiddenError("Author membership does not grant this action");
+  if (!permissions.includes(permission)) throw new HttpError(403, "Author scope is not available to this user", { code: "author_scope_forbidden", author_id: authorId });
 }
 
 async function workflowEvent(request: FastifyRequest, input: { authorId?: string; requestId?: string; appId?: string; submissionId?: string; action: string; from?: string; to?: string; metadata?: Record<string, unknown> }) {

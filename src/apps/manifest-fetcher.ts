@@ -280,3 +280,33 @@ export async function fetchManifest(baseUrl: string, options?: FetchManifestOpti
     appVersion,
   };
 }
+
+export async function fetchManifestFromUrl(manifestUrl: string, options?: FetchManifestOptions): Promise<FetchManifestResult> {
+  const parsed = new URL(manifestUrl.trim());
+  if (parsed.username || parsed.password) throw new Error("manifest_url must not include username/password");
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("manifest_url must use http or https");
+
+  const trusted = (await options?.isTrustedOrigin?.(parsed.origin)) ?? false;
+  if (parsed.protocol !== "https:" && !trusted) throw new Error("manifest_url must use https");
+  if (!trusted) await assertPublicOrigin(parsed);
+
+  const manifest = await fetchManifestAtUrl(parsed, {
+    timeoutMs: options?.timeoutMs ?? FETCH_TIMEOUT_MS,
+    maxBytes: options?.maxBytes ?? MAX_MANIFEST_BYTES,
+  });
+  if (!manifest) throw new Error("Manifest not found");
+
+  await validateManifest(manifest);
+  const appVersion = manifest["version"];
+  if (typeof appVersion !== "string" || appVersion.trim().length === 0) throw new Error("Manifest is missing valid version");
+
+  return {
+    normalizedBaseUrl: parsed.origin,
+    fetchedFromUrl: parsed.toString(),
+    fetchedAt: new Date().toISOString(),
+    manifest,
+    manifestHash: buildManifestHash(manifest),
+    manifestVersion: MANIFEST_SCHEMA_ID,
+    appVersion,
+  };
+}

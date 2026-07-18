@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { AUTHOR_ROLE_PERMISSIONS, assertWorkflowTransition, policyForMode } from "../src/authors/author-workflow-policy.js";
+import { AUTHOR_OPERATING_MODES, AUTHOR_ROLE_PERMISSIONS, assertWorkflowTransition, policyForMode } from "../src/authors/author-workflow-policy.js";
 
 describe("author workflow policy", () => {
-  it("keeps all three operating modes distinct", () => {
+  it("exposes exactly the two official operating modes", () => {
+    expect(AUTHOR_OPERATING_MODES).toEqual(["talpaversum_hosted", "trusted_self_hosted"]);
     expect(policyForMode("talpaversum_hosted")).toMatchObject({ registryRequired: true, officialCatalogEligible: true, runtimeManagement: "talpaversum_managed", licensingManagement: "talpaversum_hosted" });
     expect(policyForMode("trusted_self_hosted")).toMatchObject({ registryRequired: true, officialCatalogEligible: true, runtimeManagement: "external", licensingManagement: "external" });
-    expect(policyForMode("private_self_hosted")).toMatchObject({ registryRequired: false, officialCatalogEligible: false, runtimeManagement: "local_private", licensingManagement: "private_optional" });
   });
 
   it("does not grant global platform permissions through author roles", () => {

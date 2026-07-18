@@ -154,7 +154,6 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
     const current = await getPool().query("select * from core.author_requests where request_id=$1 and requester_user_id=$2", [requestId, request.requestContext.actor.userId]);
     if (!current.rowCount) throw new NotFoundError("Author request not found");
     const row = current.rows[0];
-    if (row.operating_mode === "private_self_hosted") throw new HttpError(409, "Private self-hosted development does not require an official author request");
     if (!row.terms_accepted) throw new HttpError(400, "Terms must be accepted before submission");
     assertWorkflowTransition("request", String(row.status), "submitted");
     const result = await getPool().query("update core.author_requests set status='submitted',submitted_at=now(),updated_at=now() where request_id=$1 returning *", [requestId]);
@@ -177,7 +176,6 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
     let authorId = typeof row["author_id"] === "string" ? row["author_id"] : null;
     if (body.action === "approve" && !authorId) {
       const mode = row["operating_mode"] as AuthorOperatingMode;
-      if (mode === "private_self_hosted") throw new HttpError(409, "Private self-hosted mode is local and cannot be approved into the official Registry");
       let publicJwks = row["public_jwks_json"] as { keys: Array<Record<string, unknown>> } | null;
       let privateJwk: JWK | null = null;
       if (mode === "talpaversum_hosted") {

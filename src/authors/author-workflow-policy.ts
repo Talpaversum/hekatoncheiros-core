@@ -1,4 +1,4 @@
-export const AUTHOR_OPERATING_MODES = ["talpaversum_hosted", "trusted_self_hosted", "private_self_hosted"] as const;
+export const AUTHOR_OPERATING_MODES = ["talpaversum_hosted", "trusted_self_hosted"] as const;
 export type AuthorOperatingMode = (typeof AUTHOR_OPERATING_MODES)[number];
 
 export const AUTHOR_PERMISSIONS = [
@@ -30,10 +30,7 @@ export function policyForMode(mode: AuthorOperatingMode) {
   if (mode === "talpaversum_hosted") {
     return { registryRequired: true, officialCatalogEligible: true, runtimeManagement: "talpaversum_managed" as const, licensingManagement: "talpaversum_hosted" as const };
   }
-  if (mode === "trusted_self_hosted") {
-    return { registryRequired: true, officialCatalogEligible: true, runtimeManagement: "external" as const, licensingManagement: "external" as const };
-  }
-  return { registryRequired: false, officialCatalogEligible: false, runtimeManagement: "local_private" as const, licensingManagement: "private_optional" as const };
+  return { registryRequired: true, officialCatalogEligible: true, runtimeManagement: "external" as const, licensingManagement: "external" as const };
 }
 
 const requestTransitions: Record<string, string[]> = {

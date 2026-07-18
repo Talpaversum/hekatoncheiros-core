@@ -37,7 +37,6 @@ async function registryRequest<T>(params: {
   path: string;
   method?: "GET" | "POST" | "DELETE";
   body?: unknown;
-  authorId?: string;
   authenticated?: boolean;
   delegatedUserToken?: string;
 }): Promise<T> {
@@ -49,12 +48,7 @@ async function registryRequest<T>(params: {
     headers: {
       accept: "application/json",
       ...(params.body ? { "content-type": "application/json" } : {}),
-      ...(params.authenticated === false ? {} : params.delegatedUserToken
-        ? { "x-hc-user-delegation": params.delegatedUserToken }
-        : params.config.AUTHOR_REGISTRY_ADMIN_TOKEN
-          ? { authorization: `Bearer ${params.config.AUTHOR_REGISTRY_ADMIN_TOKEN}` }
-          : {}),
-      ...(params.authorId ? { "x-author-id": params.authorId } : {}),
+      ...(params.authenticated === false || !params.delegatedUserToken ? {} : { "x-hc-user-delegation": params.delegatedUserToken }),
     },
     body: params.body ? JSON.stringify(params.body) : undefined,
   });
@@ -75,16 +69,15 @@ export async function onboardAuthor(params: {
   assertPublicJwks(params.jwks);
   const author = await registryRequest<{ author_id: string; display_name: string }>({
     config: params.config,
-    path: "/v1/authors",
+    path: "/v1/admin/authors",
     method: "POST",
     body: { display_name: params.displayName, operating_mode: params.operatingMode },
     delegatedUserToken: params.delegatedUserToken,
   });
   await registryRequest({
     config: params.config,
-    path: "/v1/authors/me/keys",
+    path: `/v1/admin/authors/${encodeURIComponent(author.author_id)}/keys`,
     method: "POST",
-    authorId: author.author_id,
     body: { jwks: params.jwks },
     delegatedUserToken: params.delegatedUserToken,
   });
@@ -97,9 +90,8 @@ export async function onboardAuthor(params: {
   });
   const cert = await registryRequest<{ author_cert_jws: string; root_kid: string }>({
     config: params.config,
-    path: "/v1/authors/me/certs/issue",
+    path: `/v1/admin/authors/${encodeURIComponent(author.author_id)}/certificates`,
     method: "POST",
-    authorId: author.author_id,
     body: { ttl_days: params.ttlDays },
     delegatedUserToken: params.delegatedUserToken,
   });
@@ -116,17 +108,15 @@ export async function rotateAuthorKeys(params: {
   assertPublicJwks(params.jwks);
   await registryRequest({
     config: params.config,
-    path: "/v1/authors/me/keys",
+    path: `/v1/admin/authors/${encodeURIComponent(params.authorId)}/keys`,
     method: "POST",
-    authorId: params.authorId,
     body: { jwks: params.jwks },
     delegatedUserToken: params.delegatedUserToken,
   });
   return registryRequest<{ author_cert_jws: string; root_kid: string }>({
     config: params.config,
-    path: "/v1/authors/me/certs/issue",
+    path: `/v1/admin/authors/${encodeURIComponent(params.authorId)}/certificates`,
     method: "POST",
-    authorId: params.authorId,
     body: { ttl_days: params.ttlDays },
     delegatedUserToken: params.delegatedUserToken,
   });

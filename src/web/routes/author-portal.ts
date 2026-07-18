@@ -71,7 +71,17 @@ async function workflowEvent(request: FastifyRequest, input: { authorId?: string
 
 async function registryDelegation(app: FastifyInstance, request: FastifyRequest) {
   const user = await getPool().query("select email from core.users where id=$1", [request.requestContext.actor.userId]);
-  return issueAppUserDelegation({ appId: app.config.AUTHOR_REGISTRY_APP_ID, context: request.requestContext, username: String(user.rows[0]?.email ?? request.requestContext.actor.userId), correlationId: request.id, config: app.config });
+  return issueAppUserDelegation({
+    appId: app.config.AUTHOR_REGISTRY_APP_ID,
+    context: request.requestContext,
+    username: String(user.rows[0]?.email ?? request.requestContext.actor.userId),
+    correlationId: request.id,
+    config: app.config,
+    serviceScope: {
+      purpose: "author-onboarding",
+      permissions: ["platform.author_registry.keys.manage", "platform.author_registry.certificates.issue"],
+    },
+  });
 }
 
 async function connectionWithToken(app: FastifyInstance, request: FastifyRequest, connectionId: string, permission: AuthorPermission = "author.git.manage", expectedAuthorId?: string) {

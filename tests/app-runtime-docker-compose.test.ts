@@ -38,7 +38,6 @@ function testConfig(enabled: boolean): EnvConfig {
     APP_CATALOG_AUTO_REFRESH_INTERVAL_SECONDS: 300,
     AUTHOR_REGISTRY_URL: "",
     AUTHOR_REGISTRY_ALLOW_HTTP: false,
-  AUTHOR_REGISTRY_ADMIN_TOKEN: "",
   AUTHOR_REGISTRY_APP_ID: "hekatoncheiros/author-registry",
     AUDIT_RETENTION_DAYS: 365,
     AUDIT_RETENTION_BATCH_SIZE: 1000,

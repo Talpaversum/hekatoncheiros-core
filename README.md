@@ -104,7 +104,7 @@ a Core API request. Administrators can rotate the mounted token without copying 
 
 Official author onboarding is available only when the `officialAuthorOnboarding` and `officialAuthorRegistry` instance capabilities are enabled and configured.
 
-Core authenticates human management operations toward `hc-author-registry` using short-lived delegated user identities signed by Core. Production human administration does not use `AUTHOR_REGISTRY_ADMIN_TOKEN`.
+Core authenticates Registry operations using short-lived delegated identities signed by Core. The fixed author-onboarding workflow carries only key-registration and certificate-issuance service permissions; reviewer privileges are not aliased to Registry administration.
 
 Registry service-to-service authentication must use a dedicated scoped service identity.
 

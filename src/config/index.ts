@@ -36,7 +36,6 @@ const envSchema = z.object({
   APP_CATALOG_AUTO_REFRESH_INTERVAL_SECONDS: z.coerce.number().int().min(60).default(300),
   AUTHOR_REGISTRY_URL: z.string().default(""),
   AUTHOR_REGISTRY_ALLOW_HTTP: z.string().default("false").transform((value) => value === "true" || value === "1"),
-  AUTHOR_REGISTRY_ADMIN_TOKEN: z.string().default(""),
   INSTANCE_CAPABILITIES_JSON: z.string().default("{}"),
   AUTHOR_REGISTRY_SERVICE_TOKEN: z.string().default(""),
   AUTHOR_REGISTRY_TRUSTED_JWKS_JSON: z.string().default(""),

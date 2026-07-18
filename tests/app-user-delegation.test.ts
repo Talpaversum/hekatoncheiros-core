@@ -20,6 +20,7 @@ describe("app user delegation", () => {
         privileges: ["licensing.products.manage"],
       },
       authorScope: { authorId: "author-a", permissions: ["author.licensing.manage"] },
+      serviceScope: { purpose: "author-onboarding", permissions: ["platform.author_registry.keys.manage"] },
     });
 
     const verified = await jwtVerify(token, createLocalJWKSet({ keys: [{ crv: "Ed25519", x: "yX9arOMjShM8hvqmwg7B1abzkyAQYyfYPieQaTIh5Lk", kty: "OKP", kid: "core-delegation-dev-1" }] }), {
@@ -34,6 +35,8 @@ describe("app user delegation", () => {
       privileges: ["licensing.products.manage"],
       author_id: "author-a",
       author_permissions: ["author.licensing.manage"],
+      delegation_purpose: "author-onboarding",
+      service_permissions: ["platform.author_registry.keys.manage"],
     });
   });
 });

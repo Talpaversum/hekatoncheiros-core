@@ -16,6 +16,10 @@ export async function issueAppUserDelegation(params: {
     permissions: string[];
     operatorScope?: string[];
   };
+  serviceScope?: {
+    purpose: string;
+    permissions: string[];
+  };
 }) {
   const now = Math.floor(Date.now() / 1000);
   if (!params.config.APP_DELEGATION_SIGNING_PRIVATE_JWK_JSON) {
@@ -35,6 +39,10 @@ export async function issueAppUserDelegation(params: {
       author_id: params.authorScope.authorId,
       author_permissions: params.authorScope.permissions,
       operator_scope: params.authorScope.operatorScope ?? [],
+    } : {}),
+    ...(params.serviceScope ? {
+      delegation_purpose: params.serviceScope.purpose,
+      service_permissions: params.serviceScope.permissions,
     } : {}),
     correlation_id: params.correlationId,
   })

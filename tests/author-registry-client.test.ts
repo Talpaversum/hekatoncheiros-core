@@ -6,7 +6,6 @@ import type { EnvConfig } from "../src/config/index.js";
 const config = {
   AUTHOR_REGISTRY_URL: "https://registry.example",
   AUTHOR_REGISTRY_ALLOW_HTTP: false,
-  AUTHOR_REGISTRY_ADMIN_TOKEN: "registry-admin-token",
 } as EnvConfig;
 
 afterEach(() => vi.unstubAllGlobals());
@@ -28,6 +27,7 @@ describe("author registry client", () => {
         operatingMode: "trusted_self_hosted",
         jwks: { keys: [{ kty: "OKP", crv: "Ed25519", x: "public", kid: "author-1" }] },
         ttlDays: 365,
+        delegatedUserToken: "delegated-token",
       }),
     ).resolves.toEqual({
       author_id: "aut_123",
@@ -36,10 +36,12 @@ describe("author registry client", () => {
       root_kid: "root-1",
     });
     expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://registry.example/v1/admin/authors");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe("https://registry.example/v1/admin/authors/aut_123/keys");
+    expect(String(fetchMock.mock.calls[3]?.[0])).toBe("https://registry.example/v1/admin/authors/aut_123/certificates");
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
       headers: expect.objectContaining({
-        authorization: "Bearer registry-admin-token",
-        "x-author-id": "aut_123",
+        "x-hc-user-delegation": "delegated-token",
       }),
     });
   });
@@ -54,6 +56,7 @@ describe("author registry client", () => {
         operatingMode: "trusted_self_hosted",
         jwks: { keys: [{ kty: "OKP", kid: "author-1", x: "public", d: "private" }] },
         ttlDays: 365,
+        delegatedUserToken: "delegated-token",
       }),
     ).rejects.toThrow("public keys only");
     expect(fetchMock).not.toHaveBeenCalled();

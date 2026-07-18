@@ -616,7 +616,10 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
         ],
       );
       if (runtime.plan.type !== "unmanaged") {
-        const health = await waitForDeveloperRuntimeHealth(runtime.plan);
+        const health = await waitForDeveloperRuntimeHealth(
+          runtime.plan,
+          app.config.DEVELOPER_RUNTIME_START_TIMEOUT_MS ?? 90_000,
+        );
         await appendDeveloperLog({
           tenantId: String(row["tenant_id"]),
           projectId: String(row["project_id"]),

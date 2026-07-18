@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 
+import { buildManifestHash } from "../apps/manifest-fetcher.js";
 import { validateManifest, type AppManifest } from "../apps/manifest-validator.js";
 import type { EnvConfig } from "../config/index.js";
 import { ForbiddenError, HttpError } from "../shared/errors.js";
@@ -84,6 +85,6 @@ export async function stageDeveloperProjectSource(input: {
     sourcePath,
     revision,
     manifest,
-    manifestHash: hashDeveloperValue(manifest),
+    manifestHash: buildManifestHash(manifest),
   };
 }

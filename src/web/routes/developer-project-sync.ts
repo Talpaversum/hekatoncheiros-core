@@ -5,6 +5,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import { hasPrivilege } from "../../access/privileges.js";
+import { buildManifestHash } from "../../apps/manifest-fetcher.js";
 import { validateManifest, type AppManifest } from "../../apps/manifest-validator.js";
 import { getPool } from "../../db/pool.js";
 import { findAccessibleDeveloperConnection } from "../../developer/connection-access.js";
@@ -100,9 +101,9 @@ export const buildDeveloperProjectDiff = (
   );
   return {
     manifest: {
-      changed: hash(before) !== hash(after),
-      before_hash: before ? hash(before) : null,
-      after_hash: hash(after),
+      changed: before ? buildManifestHash(before) !== buildManifestHash(after) : true,
+      before_hash: before ? buildManifestHash(before) : null,
+      after_hash: buildManifestHash(after),
     },
     ...fields,
     runtime: {
@@ -195,7 +196,7 @@ export async function registerDeveloperProjectSyncRoutes(app: FastifyInstance) {
           } | null
         )?.selected?.manifest ?? null;
       const sameRevision = row["deployed_revision"] === source.revision;
-      const sameManifest = row["manifest_hash"] === hash(source.manifest);
+      const sameManifest = row["manifest_hash"] === buildManifestHash(source.manifest);
       const managedRevisionChanged =
         Boolean(row["deployed_revision"]) &&
         !sameRevision &&

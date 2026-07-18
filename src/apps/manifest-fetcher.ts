@@ -145,12 +145,14 @@ function stableStringify(value: unknown): string {
     return `[${value.map((item) => stableStringify(item)).join(",")}]`;
   }
 
-  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
   const mapped = entries.map(([key, val]) => `${JSON.stringify(key)}:${stableStringify(val)}`);
   return `{${mapped.join(",")}}`;
 }
 
-function buildManifestHash(manifest: AppManifest): string {
+export function buildManifestHash(manifest: AppManifest): string {
   const canonicalJson = stableStringify(manifest);
   return createHash("sha256").update(canonicalJson).digest("hex");
 }
@@ -187,7 +189,10 @@ async function readBodyWithLimit(response: Response, maxBytes: number): Promise<
   return new TextDecoder().decode(merged);
 }
 
-async function fetchManifestAtUrl(url: URL, options: FetchExecutionOptions): Promise<AppManifest | null> {
+async function fetchManifestAtUrl(
+  url: URL,
+  options: FetchExecutionOptions,
+): Promise<AppManifest | null> {
   let response: Response;
   try {
     response = await fetch(url, {
@@ -229,7 +234,10 @@ async function fetchManifestAtUrl(url: URL, options: FetchExecutionOptions): Pro
   return parsed as AppManifest;
 }
 
-export async function fetchManifest(baseUrl: string, options?: FetchManifestOptions): Promise<FetchManifestResult> {
+export async function fetchManifest(
+  baseUrl: string,
+  options?: FetchManifestOptions,
+): Promise<FetchManifestResult> {
   const normalized = normalizeBaseUrl(baseUrl);
   const trusted = (await options?.isTrustedOrigin?.(normalized.origin)) ?? false;
   if (normalized.protocol !== "https:" && !trusted) {
@@ -281,10 +289,15 @@ export async function fetchManifest(baseUrl: string, options?: FetchManifestOpti
   };
 }
 
-export async function fetchManifestFromUrl(manifestUrl: string, options?: FetchManifestOptions): Promise<FetchManifestResult> {
+export async function fetchManifestFromUrl(
+  manifestUrl: string,
+  options?: FetchManifestOptions,
+): Promise<FetchManifestResult> {
   const parsed = new URL(manifestUrl.trim());
-  if (parsed.username || parsed.password) throw new Error("manifest_url must not include username/password");
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("manifest_url must use http or https");
+  if (parsed.username || parsed.password)
+    throw new Error("manifest_url must not include username/password");
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
+    throw new Error("manifest_url must use http or https");
 
   const trusted = (await options?.isTrustedOrigin?.(parsed.origin)) ?? false;
   if (parsed.protocol !== "https:" && !trusted) throw new Error("manifest_url must use https");
@@ -298,7 +311,8 @@ export async function fetchManifestFromUrl(manifestUrl: string, options?: FetchM
 
   await validateManifest(manifest);
   const appVersion = manifest["version"];
-  if (typeof appVersion !== "string" || appVersion.trim().length === 0) throw new Error("Manifest is missing valid version");
+  if (typeof appVersion !== "string" || appVersion.trim().length === 0)
+    throw new Error("Manifest is missing valid version");
 
   return {
     normalizedBaseUrl: parsed.origin,

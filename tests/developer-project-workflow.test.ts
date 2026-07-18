@@ -56,7 +56,7 @@ describe("private developer project workflow", () => {
     await getPool().query("delete from core.local_app_projects where installed_app_id=$1 or origin_url=$2", [appId, origin]);
     await getPool().query("delete from core.installed_apps where app_id=$1", [appId]);
     await getPool().query("delete from core.trusted_origins where origin=$1", [origin]);
-    await getPool().query("delete from core.user_privileges where user_id=$1 and privilege='platform.apps.manage'", [userId]);
+    await getPool().query("delete from core.user_privileges where user_id=$1 and privilege like 'developer.%'", [userId]);
     await getPool().query("delete from core.users where id=$1", [userId]);
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   });
@@ -64,7 +64,7 @@ describe("private developer project workflow", () => {
   it("installs a local unverified app without an author identity", async () => {
     const app = await buildApp();
     await getPool().query("insert into core.users(id,email,password_hash,status) values($1,$2,'test-only','active') on conflict(id) do nothing", [userId, `${userId}@example.test`]);
-    await getPool().query("insert into core.user_privileges(user_id,tenant_id,privilege) values($1,null,'platform.apps.manage') on conflict do nothing", [userId]);
+    await getPool().query("insert into core.user_privileges(user_id,tenant_id,privilege) select $1,$2,unnest($3::text[]) on conflict do nothing", [userId, tenantId, ["developer.projects.read", "developer.projects.create", "developer.projects.manage", "developer.deployments.run"]]);
     const token = await new SignJWT({ tenant_id: tenantId }).setProtectedHeader({ alg: "HS256" }).setSubject(userId).setIssuer("hekatoncheiros-core").setAudience("hc-user").setIssuedAt().setExpirationTime("5m").sign(new TextEncoder().encode(process.env["JWT_SECRET"]));
     const request = async (method: "GET" | "POST", url: string, payload?: object) => app.inject({ method, url: `/api/v1${url}`, headers: { authorization: `Bearer ${token}` }, payload });
 

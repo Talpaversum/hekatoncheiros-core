@@ -39,14 +39,23 @@ function mapProject(row: ProjectRow) {
     status: String(row["status"]), connectivity_result_json: row["connectivity_result_json"] ?? null,
     manifest_result_json: row["manifest_result_json"] ?? null, trusted_origin_id: (row["trusted_origin_id"] as string | null) ?? null,
     installed_app_id: (row["installed_app_id"] as string | null) ?? null,
+    source_connection_id: (row["source_connection_id"] as string | null) ?? null, repository: (row["repository"] as string | null) ?? null,
+    workspace_path: (row["workspace_path"] as string | null) ?? null, branch: (row["branch"] as string | null) ?? null,
+    manifest_path: (row["manifest_path"] as string | null) ?? null, source_revision: (row["source_revision"] as string | null) ?? null,
+    validated_revision: (row["validated_revision"] as string | null) ?? null, deployed_revision: (row["deployed_revision"] as string | null) ?? null,
+    manifest_hash: (row["manifest_hash"] as string | null) ?? null, runtime_type: String(row["runtime_type"]),
+    deployment_status: String(row["deployment_status"]), runtime_status: String(row["runtime_status"]), update_status: String(row["update_status"]),
+    last_sync_at: row["last_sync_at"] ? new Date(String(row["last_sync_at"])).toISOString() : null,
+    last_validation_at: row["last_validation_at"] ? new Date(String(row["last_validation_at"])).toISOString() : null,
+    last_deployment_at: row["last_deployment_at"] ? new Date(String(row["last_deployment_at"])).toISOString() : null,
     created_at: new Date(String(row["created_at"])).toISOString(), updated_at: new Date(String(row["updated_at"])).toISOString(),
   };
 }
 
-async function prepare(request: FastifyRequest, app: FastifyInstance) {
+async function prepare(request: FastifyRequest, app: FastifyInstance, privilege: string) {
   await requireUserAuth(request, app.config);
   requireInstanceCapability(app.config, "privateAppDevelopment");
-  if (!hasPrivilege(request.requestContext.privileges, "platform.apps.manage")) throw new ForbiddenError();
+  if (!hasPrivilege(request.requestContext.privileges, privilege)) throw new ForbiddenError();
 }
 
 async function findProject(request: FastifyRequest, projectId: string) {
@@ -66,7 +75,7 @@ async function fetchProjectManifest(row: ProjectRow): Promise<FetchManifestResul
 
 export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
   app.post("/developer-projects", async (request, reply) => {
-    await prepare(request, app); const body = projectSchema.parse(request.body); const projectId = `local_${randomUUID().replaceAll("-", "")}`;
+    await prepare(request, app, "developer.projects.create"); const body = projectSchema.parse(request.body); const projectId = `local_${randomUUID().replaceAll("-", "")}`;
     const origin = normalizeTrustedOrigin(body.origin_url);
     const result = await getPool().query(
       `insert into core.local_app_projects(project_id,tenant_id,created_by,display_name,origin_url,source_type,manifest_url,feed_url)
@@ -77,17 +86,17 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
   });
 
   app.get("/developer-projects", async (request, reply) => {
-    await prepare(request, app);
+    await prepare(request, app, "developer.projects.read");
     const result = await getPool().query("select * from core.local_app_projects where tenant_id=$1 order by updated_at desc", [request.requestContext.tenant.tenantId]);
     return reply.send({ items: result.rows.map(mapProject) });
   });
 
   app.get("/developer-projects/:id", async (request, reply) => {
-    await prepare(request, app); return reply.send(mapProject(await findProject(request, (request.params as { id: string }).id)));
+    await prepare(request, app, "developer.projects.read"); return reply.send(mapProject(await findProject(request, (request.params as { id: string }).id)));
   });
 
   app.put("/developer-projects/:id", async (request, reply) => {
-    await prepare(request, app); const projectId = (request.params as { id: string }).id; await findProject(request, projectId); const body = projectSchema.parse(request.body);
+    await prepare(request, app, "developer.projects.manage"); const projectId = (request.params as { id: string }).id; await findProject(request, projectId); const body = projectSchema.parse(request.body);
     const result = await getPool().query(
       `update core.local_app_projects set display_name=$3,origin_url=$4,source_type=$5,manifest_url=$6,feed_url=$7,status='draft',connectivity_result_json=null,manifest_result_json=null,trusted_origin_id=null,installed_app_id=null,updated_at=now()
        where project_id=$1 and tenant_id=$2 returning *`,
@@ -97,7 +106,7 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
   });
 
   app.post("/developer-projects/:id/test-origin", async (request, reply) => {
-    await prepare(request, app); const row = await findProject(request, (request.params as { id: string }).id); const started = Date.now(); let result: Record<string, unknown>;
+    await prepare(request, app, "developer.projects.manage"); const row = await findProject(request, (request.params as { id: string }).id); const started = Date.now(); let result: Record<string, unknown>;
     try { const response = await fetch(String(row["origin_url"]), { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(5000) }); result = { reachable: true, status_code: response.status, latency_ms: Date.now() - started, checked_at: new Date().toISOString() }; }
     catch (error) { result = { reachable: false, status_code: null, latency_ms: Date.now() - started, checked_at: new Date().toISOString(), error: error instanceof Error ? error.message : "Connection failed" }; }
     const updated = await getPool().query("update core.local_app_projects set status=$3,connectivity_result_json=$4::jsonb,updated_at=now() where project_id=$1 and tenant_id=$2 returning *", [row["project_id"], row["tenant_id"], result["reachable"] ? "connectivity_ok" : "connectivity_failed", JSON.stringify(result)]);
@@ -105,7 +114,7 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
   });
 
   app.post("/developer-projects/:id/trust-origin", async (request, reply) => {
-    await prepare(request, app); const { confirmed } = z.object({ confirmed: z.literal(true) }).parse(request.body); void confirmed;
+    await prepare(request, app, "developer.projects.manage"); const { confirmed } = z.object({ confirmed: z.literal(true) }).parse(request.body); void confirmed;
     const row = await findProject(request, (request.params as { id: string }).id); const connectivity = row["connectivity_result_json"] as { reachable?: boolean } | null;
     if (!connectivity?.reachable) throw new HttpError(409, "A successful connectivity test is required before trusting the origin");
     const store = getTrustedOriginsStore(); const origin = String(row["origin_url"]); const existing = (await store.list()).find((item) => item.origin.toLowerCase() === origin.toLowerCase());
@@ -115,7 +124,7 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
   });
 
   app.post("/developer-projects/:id/validate-source", async (request, reply) => {
-    await prepare(request, app); const row = await findProject(request, (request.params as { id: string }).id);
+    await prepare(request, app, "developer.projects.manage"); const row = await findProject(request, (request.params as { id: string }).id);
     if (!row["trusted_origin_id"]) throw new HttpError(409, "Trust the application origin before validating its source");
     let validation: Record<string, unknown>;
     try {
@@ -128,21 +137,22 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
         const first = synced.items[0]; validation = { valid: synced.errors.length === 0 && Boolean(first), errors: synced.errors.map((error) => error.message), feed: { total: synced.total, imported: synced.imported }, selected: first ? { app_id: first.app_id, app_name: first.app_name, base_url: first.base_url, manifest_url: first.manifest_url, manifest_hash: first.manifest_hash } : null };
       }
     } catch (error) { validation = { valid: false, errors: [error instanceof Error ? error.message : "Source validation failed"] }; }
-    const updated = await getPool().query("update core.local_app_projects set status=$3,manifest_result_json=$4::jsonb,updated_at=now() where project_id=$1 and tenant_id=$2 returning *", [row["project_id"], row["tenant_id"], validation["valid"] ? "source_valid" : "source_invalid", JSON.stringify(validation)]);
+    const selected = validation["selected"] as { manifest_hash?: string } | undefined;
+    const updated = await getPool().query("update core.local_app_projects set status=$3,manifest_result_json=$4::jsonb,manifest_hash=$5,validated_revision=source_revision,last_validation_at=now(),update_status=$6,updated_at=now() where project_id=$1 and tenant_id=$2 returning *", [row["project_id"], row["tenant_id"], validation["valid"] ? "source_valid" : "source_invalid", JSON.stringify(validation), selected?.manifest_hash ?? null, validation["valid"] ? "deployment_required" : "validation_failed"]);
     return reply.send(mapProject(updated.rows[0]));
   });
 
   app.post("/developer-projects/:id/install", async (request, reply) => {
-    await prepare(request, app); const row = await findProject(request, (request.params as { id: string }).id); const validation = row["manifest_result_json"] as { valid?: boolean; selected?: { manifest_hash?: string } } | null;
+    await prepare(request, app, "developer.deployments.run"); const row = await findProject(request, (request.params as { id: string }).id); const validation = row["manifest_result_json"] as { valid?: boolean; selected?: { manifest_hash?: string } } | null;
     if (row["status"] !== "source_valid" || !validation?.valid) throw new HttpError(409, "A valid manifest or feed is required before installation");
     const fetched = await fetchProjectManifest(row); if (validation.selected?.manifest_hash !== fetched.manifestHash) throw new HttpError(409, "Manifest changed after validation; validate the source again");
     const installed = await installFetchedApp({ fetched, config: app.config, tenantId: request.requestContext.tenant.tenantId, actorUserId: request.requestContext.actor.userId, effectiveUserId: request.requestContext.actor.effectiveUserId });
-    const updated = await getPool().query("update core.local_app_projects set status='installed',installed_app_id=$3,updated_at=now() where project_id=$1 and tenant_id=$2 returning *", [row["project_id"], row["tenant_id"], installed.app_id]);
+    const updated = await getPool().query("update core.local_app_projects set status='installed',installed_app_id=$3,deployed_revision=validated_revision,deployment_status='running',runtime_status='healthy',update_status='up_to_date',last_deployment_at=now(),updated_at=now() where project_id=$1 and tenant_id=$2 returning *", [row["project_id"], row["tenant_id"], installed.app_id]);
     return reply.code(201).send(mapProject(updated.rows[0]));
   });
 
   app.get("/developer-projects/:id/runtime-status", async (request, reply) => {
-    await prepare(request, app); const row = await findProject(request, (request.params as { id: string }).id); const appId = row["installed_app_id"] as string | null;
+    await prepare(request, app, "developer.projects.read"); const row = await findProject(request, (request.params as { id: string }).id); const appId = row["installed_app_id"] as string | null;
     if (!appId) throw new HttpError(409, "Project is not installed"); const installed = await getAppInstallationStore().getApp(appId); if (!installed) throw new NotFoundError("Installed application not found");
     return reply.send({ app_id: appId, slug: installed.slug, ui_url: installed.ui_url, open_url: `/app/${installed.slug}`, local: true, trust_status: "unverified", runtime: getAppRuntimeHealth(appId) });
   });

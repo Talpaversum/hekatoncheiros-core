@@ -11,7 +11,8 @@ export const PRIVILEGE_CATALOG: PrivilegeDefinition[] = [
   {
     id: "platform.superadmin",
     label: "Platform superadmin",
-    description: "Full platform administration, including users, tenants, RBAC, and platform policy.",
+    description:
+      "Full platform administration, including users, tenants, RBAC, and platform policy.",
     scope: "platform",
   },
   {
@@ -26,13 +27,66 @@ export const PRIVILEGE_CATALOG: PrivilegeDefinition[] = [
     description: "Start, stop, and operate app runtime bundles.",
     scope: "platform",
   },
-  { id: "developer.projects.read", label: "Read developer projects", description: "Read tenant-scoped local development projects.", scope: "tenant" },
-  { id: "developer.projects.create", label: "Create developer projects", description: "Create local development project drafts.", scope: "tenant" },
-  { id: "developer.projects.manage", label: "Manage developer projects", description: "Configure, validate, update, and remove local development projects.", scope: "tenant" },
-  { id: "developer.connections.manage", label: "Manage developer connections", description: "Manage encrypted source and feed connections.", scope: "tenant" },
-  { id: "developer.deployments.run", label: "Run developer deployments", description: "Deploy and roll back local development projects.", scope: "tenant" },
-  { id: "developer.runtime.manage", label: "Manage developer runtime", description: "Start, stop, restart, and rebuild local project runtimes.", scope: "tenant" },
-  { id: "developer.logs.read", label: "Read developer logs", description: "Read sanitized project, deployment, and runtime logs.", scope: "tenant" },
+  {
+    id: "developer.projects.read",
+    label: "Read developer projects",
+    description: "Read tenant-scoped local development projects.",
+    scope: "tenant",
+  },
+  {
+    id: "developer.projects.create",
+    label: "Create developer projects",
+    description: "Create local development project drafts.",
+    scope: "tenant",
+  },
+  {
+    id: "developer.projects.manage",
+    label: "Manage developer projects",
+    description: "Configure, validate, update, and remove local development projects.",
+    scope: "tenant",
+  },
+  {
+    id: "developer.connections.manage",
+    label: "Manage developer connections",
+    description: "Manage encrypted source and feed connections.",
+    scope: "tenant",
+  },
+  {
+    id: "developer.connections.personal.manage",
+    label: "Manage personal developer connections",
+    description: "Create, rotate, and revoke the user's personal developer connections.",
+    scope: "tenant",
+  },
+  {
+    id: "developer.connections.shared.manage",
+    label: "Manage shared developer connections",
+    description: "Create, rotate, and revoke tenant-shared developer connections.",
+    scope: "tenant",
+  },
+  {
+    id: "developer.connections.use",
+    label: "Use developer connections",
+    description: "Use accessible personal and tenant-shared connections in developer projects.",
+    scope: "tenant",
+  },
+  {
+    id: "developer.deployments.run",
+    label: "Run developer deployments",
+    description: "Deploy and roll back local development projects.",
+    scope: "tenant",
+  },
+  {
+    id: "developer.runtime.manage",
+    label: "Manage developer runtime",
+    description: "Start, stop, restart, and rebuild local project runtimes.",
+    scope: "tenant",
+  },
+  {
+    id: "developer.logs.read",
+    label: "Read developer logs",
+    description: "Read sanitized project, deployment, and runtime logs.",
+    scope: "tenant",
+  },
   {
     id: "platform.authors.review",
     label: "Review author requests",

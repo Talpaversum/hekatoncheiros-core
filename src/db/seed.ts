@@ -45,7 +45,12 @@ async function run() {
     "insert into core.user_privileges (user_id, tenant_id, privilege) values ($1, $2, $3) on conflict do nothing",
     ["usr_admin", null, "core.audit.append"],
   );
-  for (const privilege of ["core.audit.read.own", "core.audit.read.tenant", "platform.audit.read", "platform.audit.retention.manage"]) {
+  for (const privilege of [
+    "core.audit.read.own",
+    "core.audit.read.tenant",
+    "platform.audit.read",
+    "platform.audit.retention.manage",
+  ]) {
     await pool.query(
       "insert into core.user_privileges (user_id, tenant_id, privilege) values ($1, $2, $3) on conflict do nothing",
       ["usr_admin", privilege.startsWith("platform.") ? null : defaultTenantId, privilege],
@@ -70,6 +75,9 @@ async function run() {
     "developer.projects.create",
     "developer.projects.manage",
     "developer.connections.manage",
+    "developer.connections.personal.manage",
+    "developer.connections.shared.manage",
+    "developer.connections.use",
     "developer.deployments.run",
     "developer.runtime.manage",
     "developer.logs.read",

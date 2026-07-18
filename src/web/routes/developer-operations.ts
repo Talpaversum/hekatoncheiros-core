@@ -2,8 +2,12 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import { hasPrivilege } from "../../access/privileges.js";
-import { stopDockerComposeAppRuntime } from "../../apps/app-runtime-docker-compose.js";
+import {
+  isDockerComposeRuntimeEnabled,
+  stopDockerComposeAppRuntime,
+} from "../../apps/app-runtime-docker-compose.js";
 import { getAppRuntimeInstallation } from "../../apps/app-runtime-installation-store.js";
+import { recordAudit } from "../../audit/audit-service.js";
 import { getPool } from "../../db/pool.js";
 import { appendDeveloperLog } from "../../developer/log-service.js";
 import { requireInstanceCapability } from "../../platform/instance-capabilities.js";
@@ -23,6 +27,18 @@ const project = async (request: FastifyRequest, id: string) => {
   return result.rows[0];
 };
 export async function registerDeveloperOperationRoutes(app: FastifyInstance) {
+  app.get("/developer-projects/:id/runtime-capabilities", async (request, reply) => {
+    await prepare(request, app, "developer.projects.read");
+    const row = await project(request, (request.params as { id: string }).id);
+    const runtime = row.installed_app_id
+      ? await getAppRuntimeInstallation(String(row.installed_app_id))
+      : null;
+    const supportedActions =
+      row.runtime_type === "docker_compose" && runtime && isDockerComposeRuntimeEnabled(app.config)
+        ? ["stop"]
+        : [];
+    return reply.send({ supported_actions: supportedActions });
+  });
   app.get("/developer-deployments", async (request, reply) => {
     await prepare(request, app, "developer.projects.read");
     const query = z.object({ project_id: z.string().optional() }).parse(request.query);
@@ -95,6 +111,14 @@ export async function registerDeveloperOperationRoutes(app: FastifyInstance) {
       category: "runtime",
       level: "info",
       message: `Runtime ${body.action} completed`,
+    });
+    await recordAudit({
+      tenantId: request.requestContext.tenant.tenantId,
+      actorUserId: request.requestContext.actor.userId,
+      effectiveUserId: request.requestContext.actor.effectiveUserId,
+      action: `developer.runtime.${body.action}`,
+      objectRef: id,
+      metadata: { app_id: row.installed_app_id },
     });
     return reply.send(result);
   });

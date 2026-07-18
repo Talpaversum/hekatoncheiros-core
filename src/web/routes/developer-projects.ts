@@ -16,6 +16,7 @@ import {
 } from "../../apps/manifest-fetcher.js";
 import { validateManifest, type AppManifest } from "../../apps/manifest-validator.js";
 import { getPool } from "../../db/pool.js";
+import { findAccessibleDeveloperConnection } from "../../developer/connection-access.js";
 import { appendDeveloperLog } from "../../developer/log-service.js";
 import { requireInstanceCapability } from "../../platform/instance-capabilities.js";
 import {
@@ -161,7 +162,7 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
   app.patch("/developer-projects/:id/draft", async (request, reply) => {
     await prepare(request, app, "developer.projects.manage");
     const projectId = (request.params as { id: string }).id;
-    await findProject(request, projectId);
+    const existingProject = await findProject(request, projectId);
     const body = z
       .object({
         wizard_step: z.number().int().min(1).max(10),
@@ -180,6 +181,13 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
         wizard_state_json: z.record(z.string(), z.unknown()).optional(),
       })
       .parse(request.body);
+    if (body.source_connection_id) {
+      await findAccessibleDeveloperConnection(
+        request,
+        body.source_connection_id,
+        String(existingProject["source_type"]),
+      );
+    }
     const result = await getPool().query(
       `update core.local_app_projects set wizard_step=$3,display_name=coalesce($4,display_name),origin_url=coalesce($5,origin_url),source_connection_id=coalesce($6,source_connection_id),repository=coalesce($7,repository),workspace_path=coalesce($8,workspace_path),branch=coalesce($9,branch),manifest_path=coalesce($10,manifest_path),manifest_url=coalesce($11,manifest_url),feed_url=coalesce($12,feed_url),runtime_type=coalesce($13,runtime_type),wizard_state_json=coalesce($14::jsonb,wizard_state_json),updated_at=now() where project_id=$1 and tenant_id=$2 returning *`,
       [

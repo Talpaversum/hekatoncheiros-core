@@ -8,6 +8,7 @@ import { hasPrivilege } from "../../access/privileges.js";
 import { validateManifest, type AppManifest } from "../../apps/manifest-validator.js";
 import { getGitHubRevision, readGitHubFile } from "../../authors/github-provider.js";
 import { getPool } from "../../db/pool.js";
+import { findAccessibleDeveloperConnection } from "../../developer/connection-access.js";
 import { decryptDeveloperSecret } from "../../developer/connection-secret-store.js";
 import { readGitSource } from "../../developer/git-source-provider.js";
 import { appendDeveloperLog } from "../../developer/log-service.js";
@@ -59,7 +60,19 @@ async function readSource(
 ) {
   const type = String(row["source_type"]);
   if (type === "local_workspace") {
+    const connection = await findAccessibleDeveloperConnection(
+      request,
+      row["source_connection_id"],
+      "local_workspace",
+    );
     const workspace = await canonicalizeWorkspacePath(String(row["workspace_path"]), app.config);
+    const connectionRoot = String(
+      (connection["metadata_json"] as Record<string, unknown>)["canonical_path"],
+    );
+    const connectionChild = relative(connectionRoot, workspace);
+    if (connectionChild.startsWith("..") || isAbsolute(connectionChild)) {
+      throw new ForbiddenError("Workspace is outside the selected connection root");
+    }
     const path = resolve(workspace, String(row["manifest_path"] || "manifest/app-manifest.json"));
     const child = relative(workspace, path);
     if (child.startsWith("..") || isAbsolute(child))
@@ -70,19 +83,18 @@ async function readSource(
     return { revision: `workspace:${hash(raw)}`, manifest };
   }
   if (type === "github") {
-    const connection = await getPool().query(
-      "select * from core.developer_connections where connection_id=$1 and tenant_id=$2 and status='verified'",
-      [row["source_connection_id"], request.requestContext.tenant.tenantId],
+    const item = await findAccessibleDeveloperConnection(
+      request,
+      row["source_connection_id"],
+      "github",
     );
-    if (!connection.rowCount) throw new HttpError(409, "A verified GitHub connection is required");
-    const item = connection.rows[0];
-    if (!item.credential_ciphertext)
+    if (!item["credential_ciphertext"])
       throw new HttpError(409, "GitHub App token exchange is not configured for this installation");
     const token = decryptDeveloperSecret(
       {
-        ciphertext: String(item.credential_ciphertext),
-        iv: String(item.credential_iv),
-        tag: String(item.credential_tag),
+        ciphertext: String(item["credential_ciphertext"]),
+        iv: String(item["credential_iv"]),
+        tag: String(item["credential_tag"]),
       },
       app.config,
     );
@@ -99,18 +111,17 @@ async function readSource(
     return { revision: await getGitHubRevision(token, repository, branch), manifest };
   }
   if (type === "git" || type === "gitlab") {
-    const connection = await getPool().query(
-      "select * from core.developer_connections where connection_id=$1 and tenant_id=$2 and provider=$3 and status='verified'",
-      [row["source_connection_id"], request.requestContext.tenant.tenantId, type],
+    const item = await findAccessibleDeveloperConnection(
+      request,
+      row["source_connection_id"],
+      type,
     );
-    if (!connection.rowCount) throw new HttpError(409, `A verified ${type} connection is required`);
-    const item = connection.rows[0];
-    const credential = item.credential_ciphertext
+    const credential = item["credential_ciphertext"]
       ? decryptDeveloperSecret(
           {
-            ciphertext: String(item.credential_ciphertext),
-            iv: String(item.credential_iv),
-            tag: String(item.credential_tag),
+            ciphertext: String(item["credential_ciphertext"]),
+            iv: String(item["credential_iv"]),
+            tag: String(item["credential_tag"]),
           },
           app.config,
         )
@@ -118,7 +129,7 @@ async function readSource(
     let repository = String(row["repository"]);
     if (type === "gitlab") {
       const baseUrl = new URL(
-        String((item.metadata_json as Record<string, unknown>)["base_url"] ?? "https://gitlab.com"),
+          String((item["metadata_json"] as Record<string, unknown>)["base_url"] ?? "https://gitlab.com"),
       );
       if (baseUrl.protocol !== "https:" || baseUrl.username || baseUrl.password)
         throw new HttpError(400, "GitLab base URL must be credential-free HTTPS");
@@ -128,12 +139,12 @@ async function readSource(
       repository,
       branch: String(row["branch"] || "main"),
       manifestPath: String(row["manifest_path"] || "manifest/app-manifest.json"),
-      authMethod: String(item.auth_method),
+      authMethod: String(item["auth_method"]),
       credential,
     });
     await getPool().query(
       "update core.developer_connections set last_used_at=now(),updated_at=now() where connection_id=$1",
-      [item.connection_id],
+      [item["connection_id"]],
     );
     await validateManifest(source.manifest);
     return source;

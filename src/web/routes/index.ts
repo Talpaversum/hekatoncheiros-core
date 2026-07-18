@@ -16,6 +16,7 @@ import { registerConfigurationRoutes } from "./configuration.js";
 import { registerCapabilityRoutes } from "./capabilities.js";
 import { registerContextRoutes } from "./context.js";
 import { registerDeveloperProjectRoutes } from "./developer-projects.js";
+import { registerDeveloperConnectionRoutes } from "./developer-connections.js";
 import { registerEventRoutes } from "./events.js";
 import { registerHealthRoutes } from "./health.js";
 import { registerIdentityRoutes } from "./identity.js";
@@ -30,6 +31,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await registerConfigurationRoutes(app);
   await registerCapabilityRoutes(app);
   await registerDeveloperProjectRoutes(app);
+  await registerDeveloperConnectionRoutes(app);
   await registerIdentityRoutes(app);
   await registerLicensingRoutes(app);
   await registerPlatformTrustedOriginsRoutes(app);

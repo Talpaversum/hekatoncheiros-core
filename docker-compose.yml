@@ -61,6 +61,8 @@ x-core-environment: &core-environment
   HOSTED_LICENSING_SIGNING_KID: ${HOSTED_LICENSING_SIGNING_KID:-}
   HOSTED_LICENSING_KEY_PROVIDER_TOKEN: ${HOSTED_LICENSING_KEY_PROVIDER_TOKEN:-}
   AUTHOR_GIT_TOKEN_ENCRYPTION_KEY: ${AUTHOR_GIT_TOKEN_ENCRYPTION_KEY:-}
+  DEVELOPER_CONNECTION_ENCRYPTION_KEY: ${DEVELOPER_CONNECTION_ENCRYPTION_KEY:-development-connection-key-change-me}
+  DEVELOPER_WORKSPACE_ROOTS: ${DEVELOPER_WORKSPACE_ROOTS:-/workspace/apps}
   AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-365}
   AUDIT_RETENTION_BATCH_SIZE: ${AUDIT_RETENTION_BATCH_SIZE:-1000}
 
@@ -90,6 +92,7 @@ services:
         condition: service_healthy
     volumes:
       - core_data:/var/lib/hekatoncheiros/core-data
+      - ${DEVELOPER_WORKSPACE_HOST_PATH:-./workspace}:/workspace/apps
     healthcheck:
       test:
         [

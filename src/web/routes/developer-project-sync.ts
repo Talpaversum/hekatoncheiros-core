@@ -22,7 +22,11 @@ const prepare = async (request: FastifyRequest, app: FastifyInstance) => {
   if (!hasPrivilege(request.requestContext.privileges, "developer.projects.manage"))
     throw new ForbiddenError();
 };
-const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const hash = (value: unknown) =>
+  createHash("sha256")
+    .update(JSON.stringify(value) ?? "undefined")
+    .digest("hex");
+const rawHash = (value: string) => createHash("sha256").update(value).digest("hex");
 const project = async (request: FastifyRequest, id: string) => {
   const result = await getPool().query(
     "select * from core.local_app_projects where project_id=$1 and tenant_id=$2",
@@ -31,25 +35,101 @@ const project = async (request: FastifyRequest, id: string) => {
   if (!result.rowCount) throw new NotFoundError("Developer project not found");
   return result.rows[0];
 };
-const significant = (manifest: Record<string, unknown>) => ({
-  privileges: manifest["privileges"],
-  integration: manifest["integration"],
-  licensing: manifest["licensing"],
-  runtime: manifest["runtime"],
-  base_url: manifest["base_url"],
+const at = (manifest: Record<string, unknown> | null, ...path: string[]) =>
+  path.reduce<unknown>(
+    (value, key) =>
+      value && typeof value === "object" ? (value as Record<string, unknown>)[key] : null,
+    manifest,
+  );
+const environmentNames = (manifest: Record<string, unknown> | null) => {
+  const value = at(manifest, "runtime", "environment");
+  if (Array.isArray(value))
+    return value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.split("=", 1)[0]);
+  return value && typeof value === "object"
+    ? Object.keys(value as Record<string, unknown>).sort()
+    : [];
+};
+const safeRuntime = (manifest: Record<string, unknown> | null) => {
+  const runtime = at(manifest, "runtime");
+  if (!runtime || typeof runtime !== "object") return runtime ?? null;
+  return Object.fromEntries(
+    Object.entries(runtime as Record<string, unknown>).map(([key, value]) => [
+      key,
+      key === "environment"
+        ? environmentNames(manifest)
+        : /secret|token|password|private.?key|credential/i.test(key)
+          ? "[REDACTED]"
+          : value,
+    ]),
+  );
+};
+const change = (before: unknown, after: unknown, securitySignificant = false) => ({
+  changed: hash(before) !== hash(after),
+  before: before ?? null,
+  after: after ?? null,
+  security_significant: securitySignificant,
 });
-const diff = (before: Record<string, unknown> | null, after: Record<string, unknown>) => ({
-  manifest: {
-    changed: hash(before) !== hash(after),
-    before_hash: before ? hash(before) : null,
-    after_hash: hash(after),
-  },
-  runtime: {
-    changed: hash(before ? significant(before) : null) !== hash(significant(after)),
-    before: before ? significant(before) : null,
-    after: significant(after),
-  },
-});
+export const buildDeveloperProjectDiff = (
+  before: Record<string, unknown> | null,
+  after: Record<string, unknown>,
+  managedRevisionChanged: boolean,
+  approvalApplicable: boolean,
+) => {
+  const fields = {
+    api_routes: change(
+      at(before, "integration", "api", "exposes"),
+      at(after, "integration", "api", "exposes"),
+    ),
+    ui_entrypoint: change(
+      at(before, "integration", "ui", "artifact"),
+      at(after, "integration", "ui", "artifact"),
+    ),
+    permissions: change(at(before, "privileges"), at(after, "privileges"), true),
+    capabilities: change(at(before, "capabilities"), at(after, "capabilities"), true),
+    origin: change(at(before, "base_url"), at(after, "base_url"), true),
+    docker_image: change(at(before, "runtime", "image"), at(after, "runtime", "image"), true),
+    ports: change(at(before, "runtime", "ports"), at(after, "runtime", "ports"), true),
+    volumes: change(at(before, "runtime", "volumes"), at(after, "runtime", "volumes"), true),
+    environment_variables: change(environmentNames(before), environmentNames(after), true),
+    licensing: change(at(before, "licensing"), at(after, "licensing"), true),
+  };
+  const securityChanged = Object.values(fields).some(
+    (item) => item.changed && item.security_significant,
+  );
+  return {
+    manifest: {
+      changed: hash(before) !== hash(after),
+      before_hash: before ? hash(before) : null,
+      after_hash: hash(after),
+    },
+    ...fields,
+    runtime: {
+      changed:
+        managedRevisionChanged ||
+        securityChanged ||
+        hash(at(before, "runtime")) !== hash(at(after, "runtime")),
+      managed_source_revision_changed: managedRevisionChanged,
+      before: safeRuntime(before),
+      after: safeRuntime(after),
+    },
+    requires_runtime_approval: approvalApplicable && (managedRevisionChanged || securityChanged),
+  };
+};
+export function resolveDeveloperUpdateStatus(input: {
+  sameRevision: boolean;
+  sameManifest: boolean;
+  requiresRuntimeApproval: boolean;
+}) {
+  return input.sameRevision && input.sameManifest
+    ? "up_to_date"
+    : input.requiresRuntimeApproval
+      ? "runtime_approval_required"
+      : input.sameManifest
+        ? "deployment_required"
+        : "validation_required";
+}
 
 async function readSource(
   app: FastifyInstance,
@@ -78,7 +158,7 @@ async function readSource(
     const raw = await readFile(path, "utf8");
     const manifest = JSON.parse(raw) as AppManifest;
     await validateManifest(manifest);
-    return { revision: `workspace:${hash(raw)}`, manifest };
+    return { revision: `workspace:${rawHash(raw)}`, manifest };
   }
   if (type === "github" || type === "gitlab" || type === "git") {
     const item = await findAccessibleDeveloperConnection(
@@ -114,22 +194,29 @@ export async function registerDeveloperProjectSyncRoutes(app: FastifyInstance) {
             selected?: { manifest?: Record<string, unknown> };
           } | null
         )?.selected?.manifest ?? null;
-      const changes = diff(previous, source.manifest as Record<string, unknown>);
-      const sameRevision = row["source_revision"] === source.revision;
+      const sameRevision = row["deployed_revision"] === source.revision;
       const sameManifest = row["manifest_hash"] === hash(source.manifest);
-      const status = sameRevision
-        ? "up_to_date"
-        : sameManifest
-          ? "update_available"
-          : changes.runtime.changed
-            ? "runtime_approval_required"
-            : "validation_required";
+      const managedRevisionChanged =
+        Boolean(row["deployed_revision"]) &&
+        !sameRevision &&
+        ["dockerfile", "docker_compose"].includes(String(row["runtime_type"]));
+      const changes = buildDeveloperProjectDiff(
+        previous,
+        source.manifest as Record<string, unknown>,
+        managedRevisionChanged,
+        Boolean(row["deployed_revision"]),
+      );
+      const status = resolveDeveloperUpdateStatus({
+        sameRevision,
+        sameManifest,
+        requiresRuntimeApproval: changes.requires_runtime_approval,
+      });
       const baseUrl =
         typeof source.manifest["base_url"] === "string"
           ? normalizeTrustedOrigin(source.manifest["base_url"])
           : null;
       const result = await getPool().query(
-        "update core.local_app_projects set source_revision=$3,synced_manifest_json=$4::jsonb,pending_diff_json=$5::jsonb,last_sync_at=now(),update_status=$6,origin_url=coalesce(origin_url,$7),updated_at=now() where project_id=$1 and tenant_id=$2 returning *",
+        "update core.local_app_projects set source_revision=$3,synced_manifest_json=$4::jsonb,pending_diff_json=$5::jsonb,last_sync_at=now(),update_status=$6,origin_url=coalesce(origin_url,$7),runtime_approval_hash=null,runtime_approved_by=null,runtime_approved_at=null,updated_at=now() where project_id=$1 and tenant_id=$2 returning *",
         [
           id,
           request.requestContext.tenant.tenantId,

@@ -2,16 +2,22 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import { hasPrivilege } from "../../access/privileges.js";
+import { installFetchedApp } from "../../apps/app-installer.js";
+import { upsertDeveloperAppRuntimeInstallation } from "../../apps/app-runtime-installation-store.js";
+import { fetchManifest } from "../../apps/manifest-fetcher.js";
 import { recordAudit } from "../../audit/audit-service.js";
 import { getPool } from "../../db/pool.js";
 import {
   performDeveloperRuntimeAction,
   readDeveloperRuntimeLogs,
+  removeDeveloperRuntime,
+  startDeveloperRuntime,
   waitForDeveloperRuntimeHealth,
   type DeveloperRuntimePlan,
 } from "../../developer/deployment-runtime.js";
 import { appendDeveloperLog } from "../../developer/log-service.js";
 import { requireInstanceCapability } from "../../platform/instance-capabilities.js";
+import { getTrustedOriginsStore } from "../../platform/trusted-origins-store.js";
 import { ForbiddenError, HttpError, NotFoundError } from "../../shared/errors.js";
 import { requireUserAuth } from "../plugins/auth-user.js";
 const prepare = async (request: FastifyRequest, app: FastifyInstance, privilege: string) => {
@@ -162,7 +168,7 @@ export async function registerDeveloperOperationRoutes(app: FastifyInstance) {
     });
     return reply.send(result);
   });
-  app.post("/developer-deployments/:id/rollback", async (request) => {
+  app.post("/developer-deployments/:id/rollback", async (request, reply) => {
     await prepare(request, app, "developer.deployments.run");
     const id = (request.params as { id: string }).id;
     const found = await getPool().query(
@@ -170,9 +176,127 @@ export async function registerDeveloperOperationRoutes(app: FastifyInstance) {
       [id, request.requestContext.tenant.tenantId],
     );
     if (!found.rowCount) throw new NotFoundError("Deployment not found");
-    throw new HttpError(
-      409,
-      "Rollback is not supported by this project's current runtime provider",
+    const current = found.rows[0] as Record<string, unknown>;
+    if (
+      !current["is_active"] ||
+      !current["previous_deployment_id"] ||
+      current["rollback_status"] !== "supported"
+    ) {
+      throw new HttpError(409, "Rollback is not supported for this deployment");
+    }
+    const targetResult = await getPool().query(
+      "select * from core.developer_deployments where deployment_id=$1 and tenant_id=$2 and project_id=$3",
+      [
+        current["previous_deployment_id"],
+        request.requestContext.tenant.tenantId,
+        current["project_id"],
+      ],
     );
+    if (!targetResult.rowCount) throw new NotFoundError("Previous deployment not found");
+    const target = targetResult.rows[0] as Record<string, unknown>;
+    const currentPlan = current["runtime_plan_json"] as DeveloperRuntimePlan;
+    const targetPlan = target["runtime_plan_json"] as DeveloperRuntimePlan;
+    if (
+      !currentPlan ||
+      (currentPlan.type !== "docker_compose" && currentPlan.type !== "dockerfile") ||
+      !targetPlan ||
+      (targetPlan.type !== "docker_compose" && targetPlan.type !== "dockerfile")
+    ) {
+      throw new HttpError(409, "Previous deployment runtime cannot be restored");
+    }
+    let switched = false;
+    let currentStopped = false;
+    try {
+      await performDeveloperRuntimeAction(currentPlan, "stop");
+      currentStopped = true;
+      await startDeveloperRuntime(targetPlan);
+      await waitForDeveloperRuntimeHealth(targetPlan);
+      const trustedOrigins = await getTrustedOriginsStore().listEnabledOrigins();
+      const fetched = await fetchManifest(targetPlan.base_url, {
+        isTrustedOrigin: (origin) => trustedOrigins.has(origin),
+      });
+      if (fetched.manifestHash !== target["manifest_hash"])
+        throw new HttpError(409, "Previous deployment manifest no longer matches its snapshot");
+      const installed = await installFetchedApp({
+        fetched,
+        config: app.config,
+        tenantId: request.requestContext.tenant.tenantId,
+        actorUserId: request.requestContext.actor.userId,
+        effectiveUserId: request.requestContext.actor.effectiveUserId,
+      });
+      await upsertDeveloperAppRuntimeInstallation({
+        appId: installed.app_id,
+        runtimeType: targetPlan.type === "docker_compose" ? "compose" : "dockerfile",
+        runtimeIdentity: targetPlan.compose_project ?? targetPlan.container_name!,
+        serviceName: targetPlan.service_name!,
+        revision: String(target["source_revision"] ?? "") || null,
+      });
+      const client = await getPool().connect();
+      try {
+        await client.query("begin");
+        await client.query(
+          "update core.developer_deployments set is_active=false,status='rolled_back',finished_at=now() where deployment_id=$1",
+          [current["deployment_id"]],
+        );
+        await client.query(
+          "update core.developer_deployments set is_active=true,status='running',finished_at=now() where deployment_id=$1",
+          [target["deployment_id"]],
+        );
+        await client.query(
+          "update core.local_app_projects set installed_app_id=$3,deployed_revision=$4,manifest_hash=$5,deployment_status='running',runtime_status='healthy',update_status='up_to_date',last_deployment_at=now(),updated_at=now() where project_id=$1 and tenant_id=$2",
+          [
+            current["project_id"],
+            request.requestContext.tenant.tenantId,
+            installed.app_id,
+            target["source_revision"],
+            target["manifest_hash"],
+          ],
+        );
+        await client.query("commit");
+        switched = true;
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+      if (currentPlan) await removeDeveloperRuntime(currentPlan).catch(() => undefined);
+      await appendDeveloperLog({
+        tenantId: request.requestContext.tenant.tenantId,
+        projectId: String(current["project_id"]),
+        deploymentId: String(target["deployment_id"]),
+        category: "deployment",
+        level: "info",
+        message: `Rolled back from ${current["deployment_id"]} to ${target["deployment_id"]}`,
+      });
+      await recordAudit({
+        tenantId: request.requestContext.tenant.tenantId,
+        actorUserId: request.requestContext.actor.userId,
+        effectiveUserId: request.requestContext.actor.effectiveUserId,
+        action: "developer.deployment.rollback",
+        objectRef: String(target["deployment_id"]),
+        metadata: { previous_active_deployment_id: current["deployment_id"] },
+      });
+      return reply.send({
+        status: "running",
+        active_deployment_id: target["deployment_id"],
+        installed_app_id: installed.app_id,
+      });
+    } catch (error) {
+      if (!switched) await removeDeveloperRuntime(targetPlan).catch(() => undefined);
+      if (!switched && currentStopped) {
+        await performDeveloperRuntimeAction(currentPlan, "start").catch(() => undefined);
+        await waitForDeveloperRuntimeHealth(currentPlan).catch(() => undefined);
+      }
+      await appendDeveloperLog({
+        tenantId: request.requestContext.tenant.tenantId,
+        projectId: String(current["project_id"]),
+        deploymentId: String(current["deployment_id"]),
+        category: "deployment",
+        level: "error",
+        message: error instanceof Error ? error.message : "Rollback failed",
+      });
+      throw error;
+    }
   });
 }

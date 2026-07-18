@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -16,10 +16,12 @@ import {
   type FetchManifestResult,
 } from "../../apps/manifest-fetcher.js";
 import { validateManifest, type AppManifest } from "../../apps/manifest-validator.js";
+import { recordAudit } from "../../audit/audit-service.js";
 import { getPool } from "../../db/pool.js";
 import { findAccessibleDeveloperConnection } from "../../developer/connection-access.js";
 import {
   buildDeveloperRuntimePlan,
+  performDeveloperRuntimeAction,
   removeDeveloperRuntime,
   startDeveloperRuntime,
   waitForDeveloperRuntimeHealth,
@@ -62,6 +64,8 @@ const projectSchema = z
   });
 
 type ProjectRow = Record<string, unknown>;
+const valueHash = (value: unknown) =>
+  createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
 function mapProject(row: ProjectRow) {
   return {
@@ -359,9 +363,45 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
     return reply.send(mapProject(updated.rows[0]));
   });
 
+  app.post("/developer-projects/:id/approve-runtime", async (request, reply) => {
+    await prepare(request, app, "developer.deployments.run");
+    z.object({ confirmed: z.literal(true) }).parse(request.body);
+    const row = await findProject(request, (request.params as { id: string }).id);
+    if (row["update_status"] !== "runtime_approval_required" || !row["pending_diff_json"]) {
+      throw new HttpError(409, "This project does not have runtime changes awaiting approval");
+    }
+    const approvalHash = valueHash(row["pending_diff_json"]);
+    const updated = await getPool().query(
+      "update core.local_app_projects set runtime_approval_hash=$3,runtime_approved_by=$4,runtime_approved_at=now(),update_status='validation_required',updated_at=now() where project_id=$1 and tenant_id=$2 returning *",
+      [row["project_id"], row["tenant_id"], approvalHash, request.requestContext.actor.userId],
+    );
+    await appendDeveloperLog({
+      tenantId: String(row["tenant_id"]),
+      projectId: String(row["project_id"]),
+      category: "validation",
+      level: "info",
+      message: "Runtime changes approved",
+    });
+    await recordAudit({
+      tenantId: request.requestContext.tenant.tenantId,
+      actorUserId: request.requestContext.actor.userId,
+      effectiveUserId: request.requestContext.actor.effectiveUserId,
+      action: "developer.runtime.approved",
+      objectRef: String(row["project_id"]),
+      metadata: { approval_hash: approvalHash },
+    });
+    return reply.send(mapProject(updated.rows[0]));
+  });
+
   app.post("/developer-projects/:id/validate-source", async (request, reply) => {
     await prepare(request, app, "developer.projects.manage");
     const row = await findProject(request, (request.params as { id: string }).id);
+    const requiresApproval = (
+      row["pending_diff_json"] as { requires_runtime_approval?: boolean } | null
+    )?.requires_runtime_approval;
+    if (requiresApproval && row["runtime_approval_hash"] !== valueHash(row["pending_diff_json"])) {
+      throw new HttpError(409, "Approve the current runtime changes before validation");
+    }
     if (!row["trusted_origin_id"])
       throw new HttpError(409, "Trust the application origin before validating its source");
     let validation: Record<string, unknown>;
@@ -475,7 +515,7 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
       throw new HttpError(409, "A valid manifest or feed is required before installation");
     const deploymentId = `dep_${randomUUID().replaceAll("-", "")}`;
     const previous = await getPool().query(
-      "select deployment_id from core.developer_deployments where project_id=$1 and is_active order by started_at desc limit 1",
+      "select * from core.developer_deployments where project_id=$1 and is_active order by started_at desc limit 1",
       [row["project_id"]],
     );
     await getPool().query(
@@ -502,6 +542,8 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
       message: "Deployment source preparation started",
     });
     let runtimePlan: DeveloperRuntimePlan | null = null;
+    const previousPlan = previous.rows[0]?.runtime_plan_json as DeveloperRuntimePlan | undefined;
+    let previousStopped = false;
     try {
       const sourceType = String(row["source_type"]);
       const usesStagedSource = ["github", "gitlab", "git", "local_workspace"].includes(sourceType);
@@ -534,8 +576,16 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
         config: app.config,
       });
       runtimePlan = runtime.plan;
+      if (
+        previousPlan &&
+        (previousPlan.type === "docker_compose" || previousPlan.type === "dockerfile") &&
+        (runtime.plan.type === "docker_compose" || runtime.plan.type === "dockerfile")
+      ) {
+        await performDeveloperRuntimeAction(previousPlan, "stop");
+        previousStopped = true;
+      }
       await getPool().query(
-        "update core.developer_deployments set status='building',source_revision=$2,manifest_hash=$3,source_path=$4,runtime_plan_json=$5::jsonb,runtime_plan_hash=$6 where deployment_id=$1",
+        "update core.developer_deployments set status='building',source_revision=$2,manifest_hash=$3,source_path=$4,runtime_plan_json=$5::jsonb,runtime_plan_hash=$6,rollback_status=$7 where deployment_id=$1",
         [
           deploymentId,
           staged?.revision ?? row["validated_revision"],
@@ -543,6 +593,9 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
           staged?.sourcePath ?? null,
           JSON.stringify(runtime.plan),
           runtime.hash,
+          runtime.plan.type === "docker_compose" || runtime.plan.type === "dockerfile"
+            ? "supported"
+            : "unsupported",
         ],
       );
       const started = await startDeveloperRuntime(runtime.plan);
@@ -624,6 +677,12 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
       } finally {
         client.release();
       }
+      if (
+        previousPlan &&
+        (previousPlan.type === "docker_compose" || previousPlan.type === "dockerfile")
+      ) {
+        await removeDeveloperRuntime(previousPlan).catch(() => undefined);
+      }
       await appendDeveloperLog({
         tenantId: String(row["tenant_id"]),
         projectId: String(row["project_id"]),
@@ -636,6 +695,10 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Deployment failed";
       if (runtimePlan) await removeDeveloperRuntime(runtimePlan).catch(() => undefined);
+      if (previousStopped && previousPlan) {
+        await performDeveloperRuntimeAction(previousPlan, "start").catch(() => undefined);
+        await waitForDeveloperRuntimeHealth(previousPlan).catch(() => undefined);
+      }
       await getPool().query(
         "update core.developer_deployments set status='failed',finished_at=now(),error_code=$2,error_message=$3 where deployment_id=$1",
         [deploymentId, "deployment_failed", message],

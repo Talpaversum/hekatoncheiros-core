@@ -1,6 +1,7 @@
 node_modules/
 dist/
 core-data/
+workspace/
 certs/
 coverage/
 .env

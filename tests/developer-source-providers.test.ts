@@ -1,7 +1,9 @@
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
 import { afterAll, describe, expect, it } from "vitest";
+
 import { canonicalizeWorkspacePath, validateRepositoryReference } from "../src/developer/source-providers.js";
 
 const root = await mkdtemp(join(tmpdir(), "hc-workspace-"));
@@ -19,5 +21,8 @@ describe("developer source providers", () => {
     expect(validateRepositoryReference("github", "openai/codex")).toBe("openai/codex");
     expect(validateRepositoryReference("git", "git@example.test:team/app.git")).toContain("app.git");
     expect(() => validateRepositoryReference("git", "http://example.test/app.git")).toThrow();
+    expect(() => validateRepositoryReference("git", "https://user:secret@example.test/app.git")).toThrow(
+      "connection reference",
+    );
   });
 });

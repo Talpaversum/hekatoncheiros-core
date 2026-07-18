@@ -8,7 +8,7 @@ import { hasPrivilege } from "../../access/privileges.js";
 import { validateManifest, type AppManifest } from "../../apps/manifest-validator.js";
 import { issueAppUserDelegation } from "../../apps/app-user-delegation.js";
 import { recordAudit } from "../../audit/audit-service.js";
-import { onboardAuthor, updateRegistryAuthor } from "../../authors/author-registry-client.js";
+import { onboardAuthor } from "../../authors/author-registry-client.js";
 import { decryptAuthorSecret, encryptAuthorSecret } from "../../authors/author-secret-store.js";
 import { listGitHubRepositories, readGitHubFile, verifyGitHubConnection } from "../../authors/github-provider.js";
 import {
@@ -40,7 +40,7 @@ const repositorySchema = z.object({ connection_id: z.string().min(3), repository
 const memberSchema = z.object({ user_id: z.string().min(1), role: z.enum(["owner", "manager", "developer", "licensing", "viewer"]), permissions: z.array(z.enum(AUTHOR_PERMISSIONS)).optional() });
 
 function isPlatformOperator(request: FastifyRequest) {
-  return ["platform.superadmin", "platform.authors.manage", "platform.catalog.manage", "platform.apps.runtime.manage", "platform.author_registry.manage"].some((privilege) => hasPrivilege(request.requestContext.privileges, privilege));
+  return ["platform.superadmin", "platform.authors.review", "platform.catalog.manage", "platform.apps.runtime.manage", "platform.author_registry.read"].some((privilege) => hasPrivilege(request.requestContext.privileges, privilege));
 }
 
 function hasPlatformPrivilege(request: FastifyRequest, privilege: string) {
@@ -146,7 +146,7 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
       operating_modes: AUTHOR_OPERATING_MODES.map((mode) => ({ mode, ...policyForMode(mode) })),
       operator: isPlatformOperator(request),
       capabilities: {
-        author_review: hasPlatformPrivilege(request, "platform.authors.manage"),
+        author_review: hasPlatformPrivilege(request, "platform.authors.review"),
         catalog_review: hasPlatformPrivilege(request, "platform.catalog.manage"),
         runtime_review: hasPlatformPrivilege(request, "platform.apps.runtime.manage"),
         instance: resolveInstanceCapabilities(app.config),
@@ -191,17 +191,17 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
   });
 
   app.get("/author-portal/admin/requests", async (request, reply) => {
-    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialAuthorRegistry"); if (!hasPlatformPrivilege(request, "platform.authors.manage")) throw new ForbiddenError();
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialAuthorOnboarding"); if (!hasPlatformPrivilege(request, "platform.authors.review")) throw new ForbiddenError();
     return reply.send({ items: (await getPool().query("select * from core.author_requests order by created_at desc")).rows });
   });
 
   app.post("/author-portal/admin/requests/:id/action", async (request, reply) => {
-    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialAuthorRegistry"); if (!hasPlatformPrivilege(request, "platform.authors.manage")) throw new ForbiddenError();
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialAuthorOnboarding"); if (!hasPlatformPrivilege(request, "platform.authors.review")) throw new ForbiddenError();
     const requestId = (request.params as { id: string }).id;
-    const body = z.object({ action: z.enum(["start_review", "request_changes", "approve", "reject", "suspend", "revoke"]), notes: z.string().max(3000).optional() }).parse(request.body);
+    const body = z.object({ action: z.enum(["start_review", "request_changes", "approve", "reject"]), notes: z.string().max(3000).optional() }).parse(request.body);
     const found = await getPool().query("select * from core.author_requests where request_id=$1", [requestId]); if (!found.rowCount) throw new NotFoundError("Author request not found");
     const row = found.rows[0] as Record<string, unknown>; const from = String(row["status"]);
-    const target = { start_review: "pending_review", request_changes: "needs_changes", approve: "approved", reject: "rejected", suspend: "suspended", revoke: "revoked" }[body.action];
+    const target = { start_review: "pending_review", request_changes: "needs_changes", approve: "approved", reject: "rejected" }[body.action];
     assertWorkflowTransition("request", from, target);
     let authorId = typeof row["author_id"] === "string" ? row["author_id"] : null;
     if (body.action === "approve" && !authorId) {
@@ -219,7 +219,7 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
       const client = await getPool().connect();
       try {
         await client.query("begin");
-        await client.query(`insert into core.author_profiles(author_id,display_name,legal_name,contact_email,website,description,operating_mode,owner_tenant_id,registry_status,author_cert_jws,public_jwks_json,external_issuer_url,created_from_request_id) values($1,$2,$3,$4,$5,$6,$7,$8,'active',$9,$10::jsonb,$11,$12)`, [authorId, row["requested_display_name"], row["legal_name"], row["contact_email"], row["website"], row["description"], mode, row["tenant_id"], issued.author_cert_jws, JSON.stringify(publicJwks), row["external_issuer_url"], requestId]);
+        await client.query(`insert into core.author_profiles(author_id,display_name,legal_name,contact_email,website,description,operating_mode,owner_tenant_id,registry_status,author_cert_jws,public_jwks_json,external_issuer_url,external_issuer_status,created_from_request_id) values($1,$2,$3,$4,$5,$6,$7,$8,'active',$9,$10::jsonb,$11,$12,$13)`, [authorId, row["requested_display_name"], row["legal_name"], row["contact_email"], row["website"], row["description"], mode, row["tenant_id"], issued.author_cert_jws, JSON.stringify(publicJwks), row["external_issuer_url"], mode === "trusted_self_hosted" ? "pending_review" : "not_applicable", requestId]);
         await client.query(`insert into core.author_memberships(author_id,user_id,role,permissions_json,created_by) values($1,$2,'owner',$3::jsonb,$4)`, [authorId, row["requester_user_id"], JSON.stringify(AUTHOR_ROLE_PERMISSIONS.owner), request.requestContext.actor.userId]);
         await client.query(`insert into core.author_onboardings(author_id,display_name,public_jwks_json,author_cert_jws,root_kid,registry_url,created_by) values($1,$2,$3::jsonb,$4,$5,$6,$7)`, [authorId, row["requested_display_name"], JSON.stringify(publicJwks), issued.author_cert_jws, issued.root_kid, app.config.AUTHOR_REGISTRY_URL, request.requestContext.actor.userId]);
         if (privateJwk) {
@@ -230,11 +230,6 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
         }
         await client.query("commit");
       } catch (error) { await client.query("rollback"); throw error; } finally { client.release(); }
-    }
-    if (authorId && ["approve", "suspend", "revoke"].includes(body.action) && !(body.action === "approve" && from === "pending_review")) {
-      await updateRegistryAuthor(app.config, await registryDelegation(app, request), authorId, body.action as "approve" | "suspend" | "revoke", body.notes);
-      const profileStatus = body.action === "approve" ? "active" : body.action === "suspend" ? "suspended" : "revoked";
-      await getPool().query("update core.author_profiles set status=$2,registry_status=$2,updated_at=now() where author_id=$1", [authorId, profileStatus]);
     }
     const result = await getPool().query("update core.author_requests set status=$2,review_notes=$3,reviewed_at=now(),reviewed_by=$4,author_id=coalesce($5,author_id),updated_at=now() where request_id=$1 returning *", [requestId, target, body.notes ?? null, request.requestContext.actor.userId, authorId]);
     await workflowEvent(request, { requestId, authorId: authorId ?? undefined, action: `author.request.${body.action}`, from, to: target, metadata: { notes: body.notes } }); return reply.send(result.rows[0]);
@@ -297,8 +292,8 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
     return reply.send({ items: result.rows });
   });
 
-  app.get("/author-portal/admin/apps", async (request, reply) => {
-    await requireUserAuth(request, app.config); if (!hasPlatformPrivilege(request, "platform.catalog.manage") && !hasPlatformPrivilege(request, "platform.apps.runtime.manage")) throw new ForbiddenError();
+  app.get("/author-portal/admin/runtime/apps", async (request, reply) => {
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "hostedRuntime"); if (!hasPlatformPrivilege(request, "platform.apps.runtime.manage")) throw new ForbiddenError();
     return reply.send({ items: (await getPool().query(`select a.*,p.operating_mode,'[]'::jsonb as member_permissions_json from core.author_apps a join core.author_profiles p on p.author_id=a.author_id order by a.created_at desc`)).rows });
   });
 
@@ -321,24 +316,16 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
     assertWorkflowTransition("app", String(row.status), target); const result = await getPool().query("update core.author_apps set status=$3,review_notes=$4,updated_at=now() where author_app_id=$1 and author_id=$2 returning *", [authorAppId, authorId, target, body.notes ?? null]); await workflowEvent(request, { authorId, appId: authorAppId, action: `author.app.${body.action}`, from: String(row.status), to: target }); return reply.send(result.rows[0]);
   });
 
-  app.post("/author-portal/admin/apps/:id/action", async (request, reply) => {
-    await requireUserAuth(request, app.config); const authorAppId = (request.params as { id: string }).id; const body = z.object({ action: z.enum(["submit", "approve", "reject", "request_runtime", "approve_runtime", "mark_running", "disable"]), notes: z.string().max(3000).optional() }).parse(request.body);
+  app.post("/author-portal/admin/runtime/apps/:id/action", async (request, reply) => {
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "hostedRuntime"); if (!hasPlatformPrivilege(request, "platform.apps.runtime.manage")) throw new ForbiddenError(); const authorAppId = (request.params as { id: string }).id; const body = z.object({ action: z.enum(["approve_runtime", "mark_running", "disable"]), notes: z.string().max(3000).optional() }).parse(request.body);
     const found = await getPool().query(`select a.*,p.operating_mode from core.author_apps a join core.author_profiles p on p.author_id=a.author_id where a.author_app_id=$1`, [authorAppId]); if (!found.rowCount) throw new NotFoundError("Author application not found"); const row = found.rows[0]; const from = String(row.status);
-    const catalogAction = ["approve", "reject"].includes(body.action);
-    const runtimeAction = ["approve_runtime", "mark_running", "disable"].includes(body.action);
-    if (catalogAction) requireInstanceCapability(app.config, "officialCatalogReview");
-    if (body.action === "request_runtime" || runtimeAction) requireInstanceCapability(app.config, "hostedRuntime");
-    if (catalogAction && !hasPlatformPrivilege(request, "platform.catalog.manage")) throw new ForbiddenError();
-    if (runtimeAction && !hasPlatformPrivilege(request, "platform.apps.runtime.manage")) throw new ForbiddenError();
-    if (!catalogAction && !runtimeAction) throw new ForbiddenError();
-    const target = { submit: "submitted", approve: "approved", reject: "rejected", request_runtime: "runtime_pending", approve_runtime: "runtime_approved", mark_running: "running", disable: "disabled" }[body.action];
-    if (body.action === "request_runtime" && row.operating_mode !== "talpaversum_hosted") throw new HttpError(409, "Only Talpaversum-hosted applications can request Talpaversum runtime approval");
+    const target = { approve_runtime: "runtime_approved", mark_running: "running", disable: "disabled" }[body.action];
     assertWorkflowTransition("app", from, target); const result = await getPool().query("update core.author_apps set status=$2,review_notes=$3,updated_at=now() where author_app_id=$1 returning *", [authorAppId, target, body.notes ?? null]); await workflowEvent(request, { authorId: String(row.author_id), appId: authorAppId, action: `author.app.${body.action}`, from, to: target, metadata: { notes: body.notes } }); return reply.send(result.rows[0]);
   });
 
   app.post("/author-portal/authors/:authorId/apps/:id/catalog-submission", async (request, reply) => {
-    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialCatalogPublishing"); const { authorId, id: authorAppId } = request.params as { authorId: string; id: string }; const found = await getPool().query(`select a.*,p.operating_mode,p.registry_status from core.author_apps a join core.author_profiles p on p.author_id=a.author_id where a.author_app_id=$1 and a.author_id=$2`, [authorAppId, authorId]); if (!found.rowCount) throw new NotFoundError("Author application not found"); const row = found.rows[0]; await requireAuthorPermission(request, authorId, "author.apps.publish");
-    const policy = policyForMode(row.operating_mode as AuthorOperatingMode); const eligibility = { official_catalog_eligible: policy.officialCatalogEligible, registry_active: row.registry_status === "active", manifest_valid: (row.manifest_errors_json as unknown[]).length === 0, app_approved: ["approved", "runtime_approved", "running", "published"].includes(String(row.status)) };
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialCatalogPublishing"); const { authorId, id: authorAppId } = request.params as { authorId: string; id: string }; const found = await getPool().query(`select a.*,p.operating_mode,p.registry_status,p.external_issuer_status from core.author_apps a join core.author_profiles p on p.author_id=a.author_id where a.author_app_id=$1 and a.author_id=$2`, [authorAppId, authorId]); if (!found.rowCount) throw new NotFoundError("Author application not found"); const row = found.rows[0]; await requireAuthorPermission(request, authorId, "author.apps.publish");
+    const policy = policyForMode(row.operating_mode as AuthorOperatingMode); const eligibility = { official_catalog_eligible: policy.officialCatalogEligible, registry_active: row.registry_status === "active", external_issuer_approved: row.operating_mode !== "trusted_self_hosted" || row.external_issuer_status === "approved", manifest_valid: (row.manifest_errors_json as unknown[]).length === 0, app_approved: ["approved", "runtime_approved", "running", "published"].includes(String(row.status)) };
     if (!Object.values(eligibility).every(Boolean)) throw new HttpError(409, "Application is not eligible for official catalog submission", eligibility);
     const submissionId = id("sub"); const result = await getPool().query(`insert into core.catalog_submissions(submission_id,author_app_id,author_id,status,eligibility_json,submitted_by,submitted_at) values($1,$2,$3,'submitted',$4::jsonb,$5,now()) returning *`, [submissionId, authorAppId, row.author_id, JSON.stringify(eligibility), request.requestContext.actor.userId]); await workflowEvent(request, { authorId: String(row.author_id), appId: authorAppId, submissionId, action: "author.catalog.submitted", to: "submitted", metadata: eligibility }); return reply.code(201).send(result.rows[0]);
   });
@@ -349,6 +336,22 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
 
   app.get("/author-portal/admin/catalog-submissions", async (request, reply) => {
     await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialCatalogReview"); if (!hasPlatformPrivilege(request, "platform.catalog.manage")) throw new ForbiddenError(); return reply.send({ items: (await getPool().query(`select s.*,a.display_name,a.app_id,p.operating_mode from core.catalog_submissions s join core.author_apps a on a.author_app_id=s.author_app_id join core.author_profiles p on p.author_id=s.author_id order by s.created_at desc`)).rows, operator: true });
+  });
+
+  app.post("/author-portal/admin/catalog/external-issuers/:authorId/action", async (request, reply) => {
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialCatalogReview"); if (!hasPlatformPrivilege(request, "platform.catalog.manage")) throw new ForbiddenError();
+    const authorId = (request.params as { authorId: string }).authorId;
+    const body = z.object({ action: z.enum(["approve", "reject"]), notes: z.string().max(3000).optional() }).parse(request.body);
+    const found = await getPool().query("select operating_mode,external_issuer_url,external_issuer_status from core.author_profiles where author_id=$1", [authorId]);
+    if (!found.rowCount) throw new NotFoundError("Author profile not found");
+    const row = found.rows[0];
+    if (row.operating_mode !== "trusted_self_hosted" || !row.external_issuer_url) throw new HttpError(409, "Author does not use an external issuer");
+    const from = String(row.external_issuer_status);
+    const target = body.action === "approve" ? "approved" : "rejected";
+    if (from !== "pending_review" && from !== "rejected") throw new HttpError(409, "External issuer review is not pending", { status: from });
+    const result = await getPool().query("update core.author_profiles set external_issuer_status=$2,updated_at=now() where author_id=$1 returning *", [authorId, target]);
+    await workflowEvent(request, { authorId, action: `author.external_issuer.${body.action}`, from, to: target, metadata: { notes: body.notes, issuer_url: row.external_issuer_url } });
+    return reply.send(result.rows[0]);
   });
 
   app.post("/author-portal/admin/catalog-submissions/:id/action", async (request, reply) => {

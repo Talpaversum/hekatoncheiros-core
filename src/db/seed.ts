@@ -60,10 +60,12 @@ async function run() {
     ["usr_admin", defaultTenantId, "tenant.config.manage"],
   );
   for (const privilege of [
-    "author_registry.admin",
-    "author_registry.approve",
-    "author_registry.revoke",
-    "author_registry.audit.read",
+    "platform.authors.review",
+    "platform.author_registry.read",
+    "platform.author_registry.keys.manage",
+    "platform.author_registry.certificates.issue",
+    "platform.author_registry.revoke",
+    "platform.author_registry.audit.read",
     "licensing.products.manage",
     "licensing.customers.manage",
     "licensing.instances.manage",
@@ -75,7 +77,7 @@ async function run() {
   ]) {
     await pool.query(
       "insert into core.user_privileges (user_id, tenant_id, privilege) values ($1, $2, $3) on conflict do nothing",
-      ["usr_admin", privilege.startsWith("author_registry.") ? null : defaultTenantId, privilege],
+      ["usr_admin", privilege.startsWith("platform.") ? null : defaultTenantId, privilege],
     );
   }
   await pool.end();

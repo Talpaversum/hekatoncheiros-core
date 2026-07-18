@@ -19,6 +19,7 @@ describe("app user delegation", () => {
         actor: { userId: "usr_admin", effectiveUserId: "usr_admin", impersonating: false, delegation: null, type: "user" },
         privileges: ["licensing.products.manage"],
       },
+      authorScope: { authorId: "author-a", permissions: ["author.licensing.manage"] },
     });
 
     const verified = await jwtVerify(token, createLocalJWKSet({ keys: [{ crv: "Ed25519", x: "yX9arOMjShM8hvqmwg7B1abzkyAQYyfYPieQaTIh5Lk", kty: "OKP", kid: "core-delegation-dev-1" }] }), {
@@ -31,6 +32,8 @@ describe("app user delegation", () => {
       username: "admin@example.com",
       tenant_id: "tnt_default",
       privileges: ["licensing.products.manage"],
+      author_id: "author-a",
+      author_permissions: ["author.licensing.manage"],
     });
   });
 });

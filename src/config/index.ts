@@ -46,6 +46,7 @@ const envSchema = z.object({
   HOSTED_RUNTIME_PROVIDER_URL: z.string().default(""),
   HOSTED_LICENSING_ISSUER_URL: z.string().default(""),
   HOSTED_LICENSING_SIGNING_KID: z.string().default(""),
+  HOSTED_LICENSING_KEY_PROVIDER_TOKEN: z.string().default(""),
   AUTHOR_REGISTRY_APP_ID: z.string().default("hekatoncheiros/author-registry"),
   AUTHOR_GIT_TOKEN_ENCRYPTION_KEY: z.string().optional(),
   AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(365),

@@ -11,6 +11,11 @@ export async function issueAppUserDelegation(params: {
   username: string;
   correlationId: string;
   config: EnvConfig;
+  authorScope?: {
+    authorId: string;
+    permissions: string[];
+    operatorScope?: string[];
+  };
 }) {
   const now = Math.floor(Date.now() / 1000);
   if (!params.config.APP_DELEGATION_SIGNING_PRIVATE_JWK_JSON) {
@@ -26,6 +31,11 @@ export async function issueAppUserDelegation(params: {
     effective_user_id: params.context.actor.effectiveUserId,
     impersonating: params.context.actor.impersonating,
     privileges: params.context.privileges,
+    ...(params.authorScope ? {
+      author_id: params.authorScope.authorId,
+      author_permissions: params.authorScope.permissions,
+      operator_scope: params.authorScope.operatorScope ?? [],
+    } : {}),
     correlation_id: params.correlationId,
   })
     .setProtectedHeader({ alg: "EdDSA", typ: "JWT", kid: privateJwk.kid })

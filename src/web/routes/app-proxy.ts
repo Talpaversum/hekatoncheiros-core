@@ -78,12 +78,29 @@ export async function registerAppProxyRoutes(app: FastifyInstance) {
       request.requestContext.actor.userId,
     ]);
     const username = String(userResult.rows[0]?.email ?? request.requestContext.actor.userId);
+    const authorMatch = forwardPath.match(/^\/v1\/admin\/authors\/([^/]+)(?:\/|$)/);
+    let authorScope: { authorId: string; permissions: string[]; operatorScope?: string[] } | undefined;
+    if (authorMatch) {
+      const authorId = decodeURIComponent(authorMatch[1]);
+      const membership = await getPool().query(
+        "select permissions_json from core.author_memberships where author_id=$1 and user_id=$2 and status='active'",
+        [authorId, request.requestContext.actor.userId],
+      );
+      const operator = request.requestContext.privileges.includes("platform.superadmin");
+      if (!membership.rowCount && !operator) return reply.code(403).send({ message: "Author scope is not available to this user" });
+      authorScope = {
+        authorId,
+        permissions: (membership.rows[0]?.permissions_json as string[] | undefined) ?? [],
+        operatorScope: operator ? ["licensing.authors.manage"] : [],
+      };
+    }
     const delegation = await issueAppUserDelegation({
       appId: appInfo.app_id,
       context: request.requestContext,
       username,
       correlationId: requestMetadata.correlationId,
       config,
+      authorScope,
     });
 
     const response = await fetch(url, {

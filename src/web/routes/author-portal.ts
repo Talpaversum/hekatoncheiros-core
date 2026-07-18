@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { exportJWK, generateKeyPair, type JWK } from "jose";
@@ -99,6 +99,28 @@ async function inspectRepository(app: FastifyInstance, request: FastifyRequest, 
 }
 
 export async function registerAuthorPortalRoutes(app: FastifyInstance) {
+  app.get("/internal/hosted-licensing/authors/:authorId/signing-identity", async (request, reply) => {
+    const configured = app.config.HOSTED_LICENSING_KEY_PROVIDER_TOKEN;
+    const supplied = String(request.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    const authorized = configured.length >= 32 && supplied.length === configured.length
+      && timingSafeEqual(Buffer.from(supplied), Buffer.from(configured));
+    if (!authorized) return reply.code(401).send({ message: "Invalid hosted licensing service token" });
+    const authorId = (request.params as { authorId: string }).authorId;
+    const result = await getPool().query(
+      `select k.key_id,k.private_jwk_ciphertext,k.private_jwk_iv,k.private_jwk_tag,p.author_cert_jws
+         from core.author_signing_keys k join core.author_profiles p on p.author_id=k.author_id
+        where k.author_id=$1 and k.custody='talpaversum_managed' and k.status='active'
+        order by k.created_at desc limit 1`,
+      [authorId],
+    );
+    if (!result.rowCount) throw new NotFoundError("Hosted author signing identity not found");
+    const row = result.rows[0];
+    const privateJwk = JSON.parse(decryptAuthorSecret({
+      ciphertext: String(row.private_jwk_ciphertext), iv: String(row.private_jwk_iv), tag: String(row.private_jwk_tag),
+    }, app.config)) as JWK;
+    return reply.send({ author_id: authorId, private_jwk: privateJwk, author_cert_jws: row.author_cert_jws, key_reference: `core:${authorId}:${row.key_id}` });
+  });
+
   app.get("/author-portal/overview", async (request, reply) => {
     await requireUserAuth(request, app.config);
     const userId = request.requestContext.actor.userId;

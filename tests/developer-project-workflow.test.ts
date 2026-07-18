@@ -1,5 +1,5 @@
-import { createServer, type Server } from "node:http";
 import { randomUUID } from "node:crypto";
+import { createServer, type Server } from "node:http";
 
 import { SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -45,6 +45,7 @@ describe("private developer project workflow", () => {
         if (!request.headers.authorization) { response.writeHead(401).end(); return; }
         response.setHeader("content-type", "application/javascript"); response.end("export default function mount() {}\n"); return;
       }
+      if (request.method === "GET" && request.url === "/health") { response.setHeader("content-type", "application/json"); response.end('{"status":"healthy"}'); return; }
       response.writeHead(404).end();
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -64,7 +65,7 @@ describe("private developer project workflow", () => {
   it("installs a local unverified app without an author identity", async () => {
     const app = await buildApp();
     await getPool().query("insert into core.users(id,email,password_hash,status) values($1,$2,'test-only','active') on conflict(id) do nothing", [userId, `${userId}@example.test`]);
-    await getPool().query("insert into core.user_privileges(user_id,tenant_id,privilege) select $1,$2,unnest($3::text[]) on conflict do nothing", [userId, tenantId, ["developer.projects.read", "developer.projects.create", "developer.projects.manage", "developer.deployments.run"]]);
+    await getPool().query("insert into core.user_privileges(user_id,tenant_id,privilege) select $1,$2,unnest($3::text[]) on conflict do nothing", [userId, tenantId, ["developer.projects.read", "developer.projects.create", "developer.projects.manage", "developer.deployments.run", "developer.logs.read"]]);
     const token = await new SignJWT({ tenant_id: tenantId }).setProtectedHeader({ alg: "HS256" }).setSubject(userId).setIssuer("hekatoncheiros-core").setAudience("hc-user").setIssuedAt().setExpirationTime("5m").sign(new TextEncoder().encode(process.env["JWT_SECRET"]));
     const request = async (method: "GET" | "POST", url: string, payload?: object) => app.inject({ method, url: `/api/v1${url}`, headers: { authorization: `Bearer ${token}` }, payload });
 
@@ -85,6 +86,11 @@ describe("private developer project workflow", () => {
     const validationPayload = (await request("POST", `/developer-projects/${projectId}/validate-source`)).json();
     expect(validationPayload, JSON.stringify(validationPayload)).toMatchObject({ status: "source_valid", manifest_result_json: { valid: true, selected: { app_id: appId } } });
     expect((await request("POST", `/developer-projects/${projectId}/install`)).json()).toMatchObject({ status: "installed", installed_app_id: appId });
+    const deployments = (await request("GET", `/developer-deployments?project_id=${projectId}`)).json() as { items: Array<Record<string, unknown>> };
+    expect(deployments.items[0]).toMatchObject({ project_id: projectId, status: "running", is_active: true, runtime_plan_json: { type: "external_runtime" } });
+    expect(deployments.items[0]?.["runtime_plan_hash"]).toMatch(/^[a-f0-9]{64}$/);
+    const logs = (await request("GET", `/developer-logs?deployment_id=${deployments.items[0]?.["deployment_id"]}`)).json() as { items: Array<{ category: string }> };
+    expect(logs.items.map((item) => item.category)).toEqual(expect.arrayContaining(["deployment", "build", "runtime", "installation"]));
     expect((await request("GET", `/developer-projects/${projectId}/runtime-status`)).json()).toMatchObject({ app_id: appId, local: true, trust_status: "unverified", open_url: `/app/${slug}` });
 
     await app.close();

@@ -4,7 +4,7 @@ import type { EnvConfig } from "../config/index.js";
 import { HttpError } from "../shared/errors.js";
 
 import { decryptDeveloperSecret } from "./connection-secret-store.js";
-import { listGitRefs, readGitSource } from "./git-source-provider.js";
+import { checkoutGitRepository, listGitRefs, readGitSource } from "./git-source-provider.js";
 import { getGitHubInstallationToken } from "./github-app-provider.js";
 import { validateRepositoryReference } from "./source-providers.js";
 
@@ -35,6 +35,20 @@ function providerBaseUrl(connection: Connection) {
     throw new HttpError(400, "GitLab base URL must be credential-free HTTPS");
   }
   return baseUrl;
+}
+
+function githubCloneBaseUrl(connection: Connection, config: EnvConfig) {
+  const configured = (connection["metadata_json"] as Record<string, unknown>)["clone_base_url"];
+  const apiUrl = new URL(config.DEVELOPER_GITHUB_API_URL ?? "https://api.github.com");
+  const baseUrl = new URL(
+    String(
+      configured ?? (apiUrl.hostname === "api.github.com" ? "https://github.com" : apiUrl.origin),
+    ),
+  );
+  if (baseUrl.protocol !== "https:" || baseUrl.username || baseUrl.password) {
+    throw new HttpError(400, "GitHub clone base URL must be credential-free HTTPS");
+  }
+  return baseUrl.origin;
 }
 
 function validateManifestPath(manifestPath: string) {
@@ -291,6 +305,28 @@ export function createDeveloperSourceProvider(connection: Connection, config: En
         });
       }
       throw new HttpError(409, "This provider does not expose repository source");
+    },
+    async checkout(repository: string, ref: string, target: string) {
+      if (provider !== "github" && provider !== "gitlab" && provider !== "git") {
+        throw new HttpError(409, "This provider does not support repository checkout");
+      }
+      validateRepositoryReference(provider, repository);
+      let credential = storedCredential(connection, config);
+      if (provider === "github") {
+        credential = `x-access-token:${await githubToken(connection, config)}`;
+      }
+      return checkoutGitRepository({
+        repository:
+          provider === "github"
+            ? `${githubCloneBaseUrl(connection, config)}/${repository}.git`
+            : provider === "gitlab"
+              ? `${providerBaseUrl(connection).origin}/${repository}.git`
+              : repository,
+        ref,
+        target,
+        authMethod: String(connection["auth_method"]),
+        credential,
+      });
     },
   };
 }

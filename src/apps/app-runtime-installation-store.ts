@@ -2,7 +2,7 @@ import { getPool } from "../db/pool.js";
 
 export type AppRuntimeInstallation = {
   app_id: string;
-  runtime_type: "compose";
+  runtime_type: "compose" | "dockerfile";
   compose_project: string;
   service_name: string;
   package_sha256: string | null;
@@ -13,7 +13,7 @@ export type AppRuntimeInstallation = {
 function mapRow(row: Record<string, unknown>): AppRuntimeInstallation {
   return {
     app_id: String(row["app_id"]),
-    runtime_type: "compose",
+    runtime_type: row["runtime_type"] === "dockerfile" ? "dockerfile" : "compose",
     compose_project: String(row["compose_project"]),
     service_name: String(row["service_name"]),
     package_sha256: (row["package_sha256"] as string | null) ?? null,
@@ -67,5 +67,23 @@ export async function upsertComposeAppRuntimeInstallation(input: {
     [input.appId, input.composeProject, input.serviceName, input.packageSha256],
   );
 
+  return mapRow(result.rows[0]);
+}
+
+export async function upsertDeveloperAppRuntimeInstallation(input: {
+  appId: string;
+  runtimeType: "compose" | "dockerfile";
+  runtimeIdentity: string;
+  serviceName: string;
+  revision: string | null;
+}) {
+  const result = await getPool().query(
+    `insert into core.app_runtime_installations(app_id,runtime_type,compose_project,service_name,package_sha256)
+     values($1,$2,$3,$4,$5)
+     on conflict(app_id) do update set runtime_type=excluded.runtime_type,compose_project=excluded.compose_project,
+       service_name=excluded.service_name,package_sha256=excluded.package_sha256,updated_at=now()
+     returning app_id,runtime_type,compose_project,service_name,package_sha256,created_at,updated_at`,
+    [input.appId, input.runtimeType, input.runtimeIdentity, input.serviceName, input.revision],
+  );
   return mapRow(result.rows[0]);
 }

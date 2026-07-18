@@ -2,13 +2,14 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import { hasPrivilege } from "../../access/privileges.js";
-import {
-  isDockerComposeRuntimeEnabled,
-  stopDockerComposeAppRuntime,
-} from "../../apps/app-runtime-docker-compose.js";
-import { getAppRuntimeInstallation } from "../../apps/app-runtime-installation-store.js";
 import { recordAudit } from "../../audit/audit-service.js";
 import { getPool } from "../../db/pool.js";
+import {
+  performDeveloperRuntimeAction,
+  readDeveloperRuntimeLogs,
+  waitForDeveloperRuntimeHealth,
+  type DeveloperRuntimePlan,
+} from "../../developer/deployment-runtime.js";
 import { appendDeveloperLog } from "../../developer/log-service.js";
 import { requireInstanceCapability } from "../../platform/instance-capabilities.js";
 import { ForbiddenError, HttpError, NotFoundError } from "../../shared/errors.js";
@@ -26,16 +27,22 @@ const project = async (request: FastifyRequest, id: string) => {
   if (!result.rowCount) throw new NotFoundError("Developer project not found");
   return result.rows[0];
 };
+const activeDeployment = async (request: FastifyRequest, projectId: string) => {
+  const result = await getPool().query(
+    "select * from core.developer_deployments where tenant_id=$1 and project_id=$2 and is_active",
+    [request.requestContext.tenant.tenantId, projectId],
+  );
+  return result.rows[0] as Record<string, unknown> | undefined;
+};
 export async function registerDeveloperOperationRoutes(app: FastifyInstance) {
   app.get("/developer-projects/:id/runtime-capabilities", async (request, reply) => {
     await prepare(request, app, "developer.projects.read");
     const row = await project(request, (request.params as { id: string }).id);
-    const runtime = row.installed_app_id
-      ? await getAppRuntimeInstallation(String(row.installed_app_id))
-      : null;
+    const deployment = await activeDeployment(request, String(row.project_id));
+    const plan = deployment?.["runtime_plan_json"] as DeveloperRuntimePlan | undefined;
     const supportedActions =
-      row.runtime_type === "docker_compose" && runtime && isDockerComposeRuntimeEnabled(app.config)
-        ? ["stop"]
+      plan && (plan.type === "docker_compose" || plan.type === "dockerfile")
+        ? ["start", "stop", "restart", "rebuild"]
         : [];
     return reply.send({ supported_actions: supportedActions });
   });
@@ -48,6 +55,15 @@ export async function registerDeveloperOperationRoutes(app: FastifyInstance) {
     );
     return reply.send({ items: rows.rows });
   });
+  app.get("/developer-deployments/:id", async (request, reply) => {
+    await prepare(request, app, "developer.projects.read");
+    const result = await getPool().query(
+      "select d.*,p.display_name from core.developer_deployments d join core.local_app_projects p on p.project_id=d.project_id where d.deployment_id=$1 and d.tenant_id=$2",
+      [(request.params as { id: string }).id, request.requestContext.tenant.tenantId],
+    );
+    if (!result.rowCount) throw new NotFoundError("Deployment not found");
+    return reply.send(result.rows[0]);
+  });
   app.get("/developer-logs", async (request, reply) => {
     await prepare(request, app, "developer.logs.read");
     const query = z
@@ -57,16 +73,20 @@ export async function registerDeveloperOperationRoutes(app: FastifyInstance) {
         category: z.string().optional(),
         level: z.string().optional(),
         download: z.coerce.boolean().optional(),
+        before_id: z.coerce.number().int().positive().optional(),
+        limit: z.coerce.number().int().min(1).max(500).default(100),
       })
       .parse(request.query);
     const rows = await getPool().query(
-      "select * from core.developer_logs where tenant_id=$1 and ($2::text is null or project_id=$2) and ($3::text is null or deployment_id=$3) and ($4::text is null or category=$4) and ($5::text is null or level=$5) order by created_at desc limit 1000",
+      "select * from core.developer_logs where tenant_id=$1 and ($2::text is null or project_id=$2) and ($3::text is null or deployment_id=$3) and ($4::text is null or category=$4) and ($5::text is null or level=$5) and ($6::bigint is null or log_id<$6) order by log_id desc limit $7",
       [
         request.requestContext.tenant.tenantId,
         query.project_id ?? null,
         query.deployment_id ?? null,
         query.category ?? null,
         query.level ?? null,
+        query.before_id ?? null,
+        query.download ? 1000 : query.limit,
       ],
     );
     if (query.download) {
@@ -82,7 +102,19 @@ export async function registerDeveloperOperationRoutes(app: FastifyInstance) {
           .join("\n"),
       );
     }
-    return reply.send({ items: rows.rows });
+    return reply.send({ items: rows.rows, next_cursor: rows.rows.at(-1)?.log_id ?? null });
+  });
+  app.get("/developer-projects/:id/runtime/logs", async (request, reply) => {
+    await prepare(request, app, "developer.logs.read");
+    const id = (request.params as { id: string }).id;
+    await project(request, id);
+    const deployment = await activeDeployment(request, id);
+    const plan = deployment?.["runtime_plan_json"] as DeveloperRuntimePlan | undefined;
+    if (!plan) throw new HttpError(409, "Active runtime plan was not found");
+    const { tail } = z
+      .object({ tail: z.coerce.number().int().min(1).max(2000).default(300) })
+      .parse(request.query);
+    return reply.type("text/plain; charset=utf-8").send(await readDeveloperRuntimeLogs(plan, tail));
   });
   app.post("/developer-projects/:id/runtime/action", async (request, reply) => {
     await prepare(request, app, "developer.runtime.manage");
@@ -91,23 +123,31 @@ export async function registerDeveloperOperationRoutes(app: FastifyInstance) {
     const body = z
       .object({ action: z.enum(["start", "stop", "restart", "rebuild"]) })
       .parse(request.body);
-    if (row.runtime_type !== "docker_compose" || !row.installed_app_id)
+    const deployment = await activeDeployment(request, id);
+    const plan = deployment?.["runtime_plan_json"] as DeveloperRuntimePlan | undefined;
+    if (!plan || (plan.type !== "docker_compose" && plan.type !== "dockerfile"))
       throw new HttpError(409, "This project does not have a controllable Core-managed runtime");
-    if (body.action !== "stop")
-      throw new HttpError(409, "The stored runtime plan does not support this action yet");
-    const runtime = await getAppRuntimeInstallation(String(row.installed_app_id));
-    if (!runtime) throw new HttpError(409, "Core-managed runtime installation was not found");
-    const result = await stopDockerComposeAppRuntime({
-      config: app.config,
-      identity: { compose_project: runtime.compose_project, service_name: runtime.service_name },
-    });
+    const result = await performDeveloperRuntimeAction(plan, body.action);
+    if (body.action !== "stop") await waitForDeveloperRuntimeHealth(plan);
     await getPool().query(
-      "update core.local_app_projects set runtime_status='stopped',updated_at=now() where project_id=$1 and tenant_id=$2",
-      [id, request.requestContext.tenant.tenantId],
+      "update core.local_app_projects set runtime_status=$3,updated_at=now() where project_id=$1 and tenant_id=$2",
+      [id, request.requestContext.tenant.tenantId, body.action === "stop" ? "stopped" : "healthy"],
+    );
+    await getPool().query(
+      "update core.developer_deployments set runtime_result=$2::jsonb where deployment_id=$1",
+      [
+        deployment!["deployment_id"],
+        JSON.stringify({
+          ...result,
+          last_action: body.action,
+          action_at: new Date().toISOString(),
+        }),
+      ],
     );
     await appendDeveloperLog({
       tenantId: request.requestContext.tenant.tenantId,
       projectId: id,
+      deploymentId: String(deployment!["deployment_id"]),
       category: "runtime",
       level: "info",
       message: `Runtime ${body.action} completed`,

@@ -56,6 +56,7 @@ const envSchema = z.object({
   DEVELOPER_GITHUB_APP_ID: z.string().optional(),
   DEVELOPER_GITHUB_APP_PRIVATE_KEY: z.string().optional(),
   DEVELOPER_GITHUB_API_URL: z.string().url().optional(),
+  DEVELOPER_DOCKER_NETWORK: z.string().trim().min(1).optional(),
   AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(365),
   AUDIT_RETENTION_BATCH_SIZE: z.coerce.number().int().min(1).max(10000).default(1000),
 });

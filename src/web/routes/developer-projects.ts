@@ -9,6 +9,7 @@ import { getAppCatalogStore } from "../../apps/app-catalog-store.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { installFetchedApp } from "../../apps/app-installer.js";
 import { getAppRuntimeHealth } from "../../apps/app-runtime-health.js";
+import { upsertDeveloperAppRuntimeInstallation } from "../../apps/app-runtime-installation-store.js";
 import {
   fetchManifest,
   fetchManifestFromUrl,
@@ -17,6 +18,14 @@ import {
 import { validateManifest, type AppManifest } from "../../apps/manifest-validator.js";
 import { getPool } from "../../db/pool.js";
 import { findAccessibleDeveloperConnection } from "../../developer/connection-access.js";
+import {
+  buildDeveloperRuntimePlan,
+  removeDeveloperRuntime,
+  startDeveloperRuntime,
+  waitForDeveloperRuntimeHealth,
+  type DeveloperRuntimePlan,
+} from "../../developer/deployment-runtime.js";
+import { stageDeveloperProjectSource } from "../../developer/deployment-source.js";
 import { appendDeveloperLog } from "../../developer/log-service.js";
 import { requireInstanceCapability } from "../../platform/instance-capabilities.js";
 import {
@@ -466,11 +475,11 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
       throw new HttpError(409, "A valid manifest or feed is required before installation");
     const deploymentId = `dep_${randomUUID().replaceAll("-", "")}`;
     const previous = await getPool().query(
-      "select deployment_id from core.developer_deployments where project_id=$1 and status='running' order by started_at desc limit 1",
+      "select deployment_id from core.developer_deployments where project_id=$1 and is_active order by started_at desc limit 1",
       [row["project_id"]],
     );
     await getPool().query(
-      "insert into core.developer_deployments(deployment_id,tenant_id,project_id,source_revision,manifest_hash,status,started_by,manifest_snapshot_json,previous_deployment_id,rollback_status) values($1,$2,$3,$4,$5,'validating',$6,$7::jsonb,$8,'unsupported')",
+      "insert into core.developer_deployments(deployment_id,tenant_id,project_id,source_revision,manifest_hash,status,started_by,manifest_snapshot_json,previous_deployment_id,rollback_status) values($1,$2,$3,$4,$5,'syncing',$6,$7::jsonb,$8,'unsupported')",
       [
         deploymentId,
         row["tenant_id"],
@@ -490,10 +499,81 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
       deploymentId,
       category: "deployment",
       level: "info",
-      message: "Deployment validation started",
+      message: "Deployment source preparation started",
     });
+    let runtimePlan: DeveloperRuntimePlan | null = null;
     try {
-      const fetched = await fetchProjectManifest(row);
+      const sourceType = String(row["source_type"]);
+      const usesStagedSource = ["github", "gitlab", "git", "local_workspace"].includes(sourceType);
+      const connection = usesStagedSource
+        ? await findAccessibleDeveloperConnection(request, row["source_connection_id"], sourceType)
+        : undefined;
+      const staged = usesStagedSource
+        ? await stageDeveloperProjectSource({ deploymentId, row, connection, config: app.config })
+        : null;
+      if (staged && staged.revision !== row["validated_revision"])
+        throw new HttpError(
+          409,
+          "Source revision changed after validation; synchronize and validate again",
+        );
+      if (staged && staged.manifestHash !== row["manifest_hash"])
+        throw new HttpError(409, "Manifest changed after validation; validate the source again");
+      let fetched = staged ? null : await fetchProjectManifest(row);
+      const runtime = await buildDeveloperRuntimePlan({
+        deploymentId,
+        projectId: String(row["project_id"]),
+        runtimeType: String(row["runtime_type"]),
+        sourcePath: staged?.sourcePath ?? null,
+        manifest: {
+          ...(staged?.manifest ?? fetched!.manifest),
+          base_url:
+            ((staged?.manifest ?? fetched!.manifest)["base_url"] ?? staged)
+              ? row["origin_url"]
+              : fetched!.normalizedBaseUrl,
+        },
+        config: app.config,
+      });
+      runtimePlan = runtime.plan;
+      await getPool().query(
+        "update core.developer_deployments set status='building',source_revision=$2,manifest_hash=$3,source_path=$4,runtime_plan_json=$5::jsonb,runtime_plan_hash=$6 where deployment_id=$1",
+        [
+          deploymentId,
+          staged?.revision ?? row["validated_revision"],
+          staged?.manifestHash ?? row["manifest_hash"],
+          staged?.sourcePath ?? null,
+          JSON.stringify(runtime.plan),
+          runtime.hash,
+        ],
+      );
+      const started = await startDeveloperRuntime(runtime.plan);
+      await appendDeveloperLog({
+        tenantId: String(row["tenant_id"]),
+        projectId: String(row["project_id"]),
+        deploymentId,
+        category: "build",
+        level: "info",
+        message: started.buildLog || `Runtime plan ${runtime.plan.type} requires no build`,
+      });
+      await getPool().query(
+        "update core.developer_deployments set status='validating',build_result=$2::jsonb,runtime_result=$3::jsonb where deployment_id=$1",
+        [
+          deploymentId,
+          JSON.stringify({ status: "completed", runtime_type: runtime.plan.type }),
+          JSON.stringify(started.result),
+        ],
+      );
+      if (runtime.plan.type !== "unmanaged") {
+        const health = await waitForDeveloperRuntimeHealth(runtime.plan);
+        await appendDeveloperLog({
+          tenantId: String(row["tenant_id"]),
+          projectId: String(row["project_id"]),
+          deploymentId,
+          category: "runtime",
+          level: "info",
+          message: `Runtime health check passed at ${health.checked_url}`,
+        });
+      }
+      if (!fetched) fetched = await fetchProjectManifest(row);
       if (validation.selected?.manifest_hash !== fetched.manifestHash)
         throw new HttpError(409, "Manifest changed after validation; validate the source again");
       await getPool().query(
@@ -507,18 +587,43 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
         actorUserId: request.requestContext.actor.userId,
         effectiveUserId: request.requestContext.actor.effectiveUserId,
       });
-      const updated = await getPool().query(
-        "update core.local_app_projects set status='installed',installed_app_id=$3,deployed_revision=validated_revision,deployment_status='running',runtime_status='healthy',update_status='up_to_date',last_deployment_at=now(),updated_at=now() where project_id=$1 and tenant_id=$2 returning *",
-        [row["project_id"], row["tenant_id"], installed.app_id],
-      );
-      await getPool().query(
-        "update core.developer_deployments set status='running',finished_at=now(),install_result=$2::jsonb,runtime_result=$3::jsonb where deployment_id=$1",
-        [
-          deploymentId,
-          JSON.stringify({ app_id: installed.app_id, status: "installed" }),
-          JSON.stringify({ status: "healthy" }),
-        ],
-      );
+      if (runtime.plan.type === "docker_compose" || runtime.plan.type === "dockerfile") {
+        await upsertDeveloperAppRuntimeInstallation({
+          appId: installed.app_id,
+          runtimeType: runtime.plan.type === "docker_compose" ? "compose" : "dockerfile",
+          runtimeIdentity: runtime.plan.compose_project ?? runtime.plan.container_name!,
+          serviceName: runtime.plan.service_name!,
+          revision: staged?.revision ?? null,
+        });
+      }
+      const client = await getPool().connect();
+      let updated;
+      try {
+        await client.query("begin");
+        await client.query(
+          "update core.developer_deployments set is_active=false where project_id=$1 and is_active",
+          [row["project_id"]],
+        );
+        updated = await client.query(
+          "update core.local_app_projects set status='installed',installed_app_id=$3,deployed_revision=$4,deployment_status='running',runtime_status='healthy',update_status='up_to_date',last_deployment_at=now(),updated_at=now() where project_id=$1 and tenant_id=$2 returning *",
+          [
+            row["project_id"],
+            row["tenant_id"],
+            installed.app_id,
+            staged?.revision ?? row["validated_revision"],
+          ],
+        );
+        await client.query(
+          "update core.developer_deployments set status='running',is_active=true,finished_at=now(),install_result=$2::jsonb where deployment_id=$1",
+          [deploymentId, JSON.stringify({ app_id: installed.app_id, status: "installed" })],
+        );
+        await client.query("commit");
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
       await appendDeveloperLog({
         tenantId: String(row["tenant_id"]),
         projectId: String(row["project_id"]),
@@ -530,14 +635,16 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
       return reply.code(201).send(mapProject(updated.rows[0]));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Deployment failed";
+      if (runtimePlan) await removeDeveloperRuntime(runtimePlan).catch(() => undefined);
       await getPool().query(
-        "update core.developer_deployments set status='failed',finished_at=now(),error_message=$2 where deployment_id=$1",
-        [deploymentId, message],
+        "update core.developer_deployments set status='failed',finished_at=now(),error_code=$2,error_message=$3 where deployment_id=$1",
+        [deploymentId, "deployment_failed", message],
       );
-      await getPool().query(
-        "update core.local_app_projects set deployment_status='failed',update_status='deployment_failed',updated_at=now() where project_id=$1",
-        [row["project_id"]],
-      );
+      if (!previous.rowCount)
+        await getPool().query(
+          "update core.local_app_projects set deployment_status='failed',update_status='deployment_failed',updated_at=now() where project_id=$1",
+          [row["project_id"]],
+        );
       await appendDeveloperLog({
         tenantId: String(row["tenant_id"]),
         projectId: String(row["project_id"]),

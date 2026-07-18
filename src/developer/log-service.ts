@@ -13,6 +13,21 @@ export function sanitizeDeveloperLog(value: string) {
     )
     .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [REDACTED]");
 }
+
+function sanitizeContext(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeContext);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        /authorization|token|password|secret|private.?key|credential|environment/i.test(key)
+          ? "[REDACTED]"
+          : sanitizeContext(item),
+      ]),
+    );
+  }
+  return typeof value === "string" ? sanitizeDeveloperLog(value) : value;
+}
 export async function appendDeveloperLog(input: {
   tenantId: string;
   projectId: string;
@@ -30,8 +45,18 @@ export async function appendDeveloperLog(input: {
       input.deploymentId ?? null,
       input.category,
       input.level,
-      sanitizeDeveloperLog(input.message),
-      JSON.stringify(input.context ?? {}),
+      sanitizeDeveloperLog(input.message).slice(0, 100_000),
+      JSON.stringify(sanitizeContext(input.context ?? {})),
     ],
+  );
+  await getPool().query(
+    `delete from core.developer_logs
+      where project_id=$1 and (
+        created_at < now() - interval '30 days'
+        or log_id in (
+          select log_id from core.developer_logs where project_id=$1 order by log_id desc offset 10000
+        )
+      )`,
+    [input.projectId],
   );
 }

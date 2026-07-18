@@ -68,6 +68,48 @@ export async function listGitRefs(input: {
   }
 }
 
+export async function checkoutGitRepository(input: {
+  repository: string;
+  ref: string;
+  target: string;
+  authMethod: string;
+  credential?: string;
+}) {
+  const auth = await gitAuth(input);
+  try {
+    try {
+      await run(
+        "git",
+        [
+          ...auth.args,
+          "clone",
+          "--depth",
+          "1",
+          "--single-branch",
+          "--branch",
+          input.ref,
+          input.repository,
+          input.target,
+        ],
+        { env: auth.env, timeout: 180_000, maxBuffer: 2 * 1024 * 1024 },
+      );
+    } catch {
+      throw new HttpError(502, "Git repository checkout failed");
+    }
+    const revision = (
+      await run("git", ["-C", input.target, "rev-parse", "HEAD"], {
+        env: auth.env,
+        timeout: 30_000,
+      })
+    ).stdout
+      .toString()
+      .trim();
+    return { revision };
+  } finally {
+    await rm(auth.root, { recursive: true, force: true });
+  }
+}
+
 export async function readGitSource(input: {
   repository: string;
   branch: string;

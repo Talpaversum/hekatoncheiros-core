@@ -27,6 +27,12 @@ export function listGitHubRepositories(token: string) {
   return githubRequest<GitHubRepository[]>(token, "/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member");
 }
 
+export async function getGitHubRevision(token: string, repository: string, branch: string) {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw Object.assign(new Error("Invalid GitHub repository name"), { statusCode: 400 });
+  const result = await githubRequest<{ sha: string }>(token, `/repos/${repository}/commits/${encodeURIComponent(branch)}`);
+  return result.sha;
+}
+
 export async function readGitHubFile(token: string, repository: string, branch: string, filePath: string): Promise<string> {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw Object.assign(new Error("Invalid GitHub repository name"), { statusCode: 400 });
   if (!branch.trim() || !filePath.trim() || filePath.startsWith("/") || filePath.split("/").includes("..")) {

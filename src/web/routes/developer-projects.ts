@@ -10,6 +10,7 @@ import { getAppInstallationStore } from "../../apps/app-installation-service.js"
 import { installFetchedApp } from "../../apps/app-installer.js";
 import { getAppRuntimeHealth } from "../../apps/app-runtime-health.js";
 import { fetchManifest, fetchManifestFromUrl, type FetchManifestResult } from "../../apps/manifest-fetcher.js";
+import { validateManifest, type AppManifest } from "../../apps/manifest-validator.js";
 import { getPool } from "../../db/pool.js";
 import { requireInstanceCapability } from "../../platform/instance-capabilities.js";
 import { getTrustedOriginsStore, normalizeTrustedOrigin } from "../../platform/trusted-origins-store.js";
@@ -48,6 +49,7 @@ function mapProject(row: ProjectRow) {
     last_sync_at: row["last_sync_at"] ? new Date(String(row["last_sync_at"])).toISOString() : null,
     last_validation_at: row["last_validation_at"] ? new Date(String(row["last_validation_at"])).toISOString() : null,
     last_deployment_at: row["last_deployment_at"] ? new Date(String(row["last_deployment_at"])).toISOString() : null,
+    synced_manifest_json: row["synced_manifest_json"] ?? null, pending_diff_json: row["pending_diff_json"] ?? null,
     wizard_step: Number(row["wizard_step"]), wizard_state_json: row["wizard_state_json"] ?? {},
     created_at: new Date(String(row["created_at"])).toISOString(), updated_at: new Date(String(row["updated_at"])).toISOString(),
   };
@@ -152,7 +154,12 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
         const source = await getAppCatalogStore().createFeedSource({ name: `Private project: ${row["display_name"]}`, feedUrl: String(row["feed_url"]), trustMode: "dev", createdBy: request.requestContext.actor.userId });
         const synced = await syncCatalogFeedSource({ source, actorUserId: request.requestContext.actor.userId, config: app.config, isTrustedOrigin: trusted });
         const first = synced.items[0]; validation = { valid: synced.errors.length === 0 && Boolean(first), errors: synced.errors.map((error) => error.message), feed: { total: synced.total, imported: synced.imported }, selected: first ? { app_id: first.app_id, app_name: first.app_name, base_url: first.base_url, manifest_url: first.manifest_url, manifest_hash: first.manifest_hash } : null };
-      } else throw new HttpError(409, "Synchronize the repository or workspace source before manifest validation");
+      } else {
+        const manifest = row["synced_manifest_json"] as AppManifest | null;
+        if (!manifest) throw new HttpError(409, "Synchronize the repository or workspace source before manifest validation");
+        await validateManifest(manifest);
+        validation = { valid: true, errors: [], selected: { app_id: manifest["app_id"], app_name: manifest["app_name"], base_url: manifest["base_url"] ?? row["origin_url"], manifest_url: null, manifest_hash: row["pending_diff_json"] ? (row["pending_diff_json"] as {manifest?:{after_hash?:string}}).manifest?.after_hash : null, manifest } };
+      }
     } catch (error) { validation = { valid: false, errors: [error instanceof Error ? error.message : "Source validation failed"] }; }
     const selected = validation["selected"] as { manifest_hash?: string } | undefined;
     const updated = await getPool().query("update core.local_app_projects set status=$3,manifest_result_json=$4::jsonb,manifest_hash=$5,validated_revision=source_revision,last_validation_at=now(),update_status=$6,updated_at=now() where project_id=$1 and tenant_id=$2 returning *", [row["project_id"], row["tenant_id"], validation["valid"] ? "source_valid" : "source_invalid", JSON.stringify(validation), selected?.manifest_hash ?? null, validation["valid"] ? "deployment_required" : "validation_failed"]);

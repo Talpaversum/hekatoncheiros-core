@@ -6,12 +6,10 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import { hasPrivilege } from "../../access/privileges.js";
 import { validateManifest, type AppManifest } from "../../apps/manifest-validator.js";
-import { getGitHubRevision, readGitHubFile } from "../../authors/github-provider.js";
 import { getPool } from "../../db/pool.js";
 import { findAccessibleDeveloperConnection } from "../../developer/connection-access.js";
-import { decryptDeveloperSecret } from "../../developer/connection-secret-store.js";
-import { readGitSource } from "../../developer/git-source-provider.js";
 import { appendDeveloperLog } from "../../developer/log-service.js";
+import { createDeveloperSourceProvider } from "../../developer/source-provider-adapter.js";
 import { canonicalizeWorkspacePath } from "../../developer/source-providers.js";
 import { requireInstanceCapability } from "../../platform/instance-capabilities.js";
 import { normalizeTrustedOrigin } from "../../platform/trusted-origins-store.js";
@@ -82,66 +80,17 @@ async function readSource(
     await validateManifest(manifest);
     return { revision: `workspace:${hash(raw)}`, manifest };
   }
-  if (type === "github") {
-    const item = await findAccessibleDeveloperConnection(
-      request,
-      row["source_connection_id"],
-      "github",
-    );
-    if (!item["credential_ciphertext"])
-      throw new HttpError(409, "GitHub App token exchange is not configured for this installation");
-    const token = decryptDeveloperSecret(
-      {
-        ciphertext: String(item["credential_ciphertext"]),
-        iv: String(item["credential_iv"]),
-        tag: String(item["credential_tag"]),
-      },
-      app.config,
-    );
-    const repository = String(row["repository"]);
-    const branch = String(row["branch"] || "main");
-    const raw = await readGitHubFile(
-      token,
-      repository,
-      branch,
-      String(row["manifest_path"] || "manifest/app-manifest.json"),
-    );
-    const manifest = JSON.parse(raw) as AppManifest;
-    await validateManifest(manifest);
-    return { revision: await getGitHubRevision(token, repository, branch), manifest };
-  }
-  if (type === "git" || type === "gitlab") {
+  if (type === "github" || type === "gitlab" || type === "git") {
     const item = await findAccessibleDeveloperConnection(
       request,
       row["source_connection_id"],
       type,
     );
-    const credential = item["credential_ciphertext"]
-      ? decryptDeveloperSecret(
-          {
-            ciphertext: String(item["credential_ciphertext"]),
-            iv: String(item["credential_iv"]),
-            tag: String(item["credential_tag"]),
-          },
-          app.config,
-        )
-      : undefined;
-    let repository = String(row["repository"]);
-    if (type === "gitlab") {
-      const baseUrl = new URL(
-          String((item["metadata_json"] as Record<string, unknown>)["base_url"] ?? "https://gitlab.com"),
-      );
-      if (baseUrl.protocol !== "https:" || baseUrl.username || baseUrl.password)
-        throw new HttpError(400, "GitLab base URL must be credential-free HTTPS");
-      repository = `${baseUrl.href.replace(/\/$/, "")}/${repository}.git`;
-    }
-    const source = await readGitSource({
-      repository,
-      branch: String(row["branch"] || "main"),
-      manifestPath: String(row["manifest_path"] || "manifest/app-manifest.json"),
-      authMethod: String(item["auth_method"]),
-      credential,
-    });
+    const source = await createDeveloperSourceProvider(item, app.config).source(
+      String(row["repository"]),
+      String(row["branch"] || "main"),
+      String(row["manifest_path"] || "manifest/app-manifest.json"),
+    );
     await getPool().query(
       "update core.developer_connections set last_used_at=now(),updated_at=now() where connection_id=$1",
       [item["connection_id"]],

@@ -35,7 +35,10 @@ const envSchema = z.object({
     .transform((value) => value === "true" || value === "1"),
   APP_CATALOG_AUTO_REFRESH_INTERVAL_SECONDS: z.coerce.number().int().min(60).default(300),
   AUTHOR_REGISTRY_URL: z.string().default(""),
-  AUTHOR_REGISTRY_ALLOW_HTTP: z.string().default("false").transform((value) => value === "true" || value === "1"),
+  AUTHOR_REGISTRY_ALLOW_HTTP: z
+    .string()
+    .default("false")
+    .transform((value) => value === "true" || value === "1"),
   INSTANCE_CAPABILITIES_JSON: z.string().default("{}"),
   AUTHOR_REGISTRY_SERVICE_TOKEN: z.string().default(""),
   AUTHOR_REGISTRY_TRUSTED_JWKS_JSON: z.string().default(""),
@@ -50,6 +53,9 @@ const envSchema = z.object({
   AUTHOR_GIT_TOKEN_ENCRYPTION_KEY: z.string().optional(),
   DEVELOPER_CONNECTION_ENCRYPTION_KEY: z.string().optional(),
   DEVELOPER_WORKSPACE_ROOTS: z.string().optional(),
+  DEVELOPER_GITHUB_APP_ID: z.string().optional(),
+  DEVELOPER_GITHUB_APP_PRIVATE_KEY: z.string().optional(),
+  DEVELOPER_GITHUB_API_URL: z.string().url().optional(),
   AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(365),
   AUDIT_RETENTION_BATCH_SIZE: z.coerce.number().int().min(1).max(10000).default(1000),
 });

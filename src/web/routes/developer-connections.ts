@@ -11,10 +11,16 @@ import {
   requireConnectionManagement,
   requireConnectionUse,
 } from "../../developer/connection-access.js";
+import { findAccessibleDeveloperConnection } from "../../developer/connection-access.js";
 import {
   decryptDeveloperSecret,
   encryptDeveloperSecret,
 } from "../../developer/connection-secret-store.js";
+import {
+  forgetGitHubInstallationToken,
+  getGitHubInstallationToken,
+} from "../../developer/github-app-provider.js";
+import { createDeveloperSourceProvider } from "../../developer/source-provider-adapter.js";
 import { canonicalizeWorkspacePath } from "../../developer/source-providers.js";
 import { requireInstanceCapability } from "../../platform/instance-capabilities.js";
 import { ForbiddenError, NotFoundError } from "../../shared/errors.js";
@@ -69,6 +75,33 @@ const audit = (request: FastifyRequest, action: string, connectionId: string) =>
   });
 
 export async function registerDeveloperConnectionRoutes(app: FastifyInstance) {
+  app.get("/developer-connections/:id/repositories", async (request, reply) => {
+    await prepare(request, app);
+    const id = (request.params as { id: string }).id;
+    const connection = await findAccessibleDeveloperConnection(request, id);
+    const result = await createDeveloperSourceProvider(connection, app.config).repositories();
+    await getPool().query(
+      "update core.developer_connections set last_used_at=now() where connection_id=$1",
+      [id],
+    );
+    await audit(request, "developer.connection.repositories.listed", id);
+    return reply.send(result);
+  });
+  app.get("/developer-connections/:id/refs", async (request, reply) => {
+    await prepare(request, app);
+    const id = (request.params as { id: string }).id;
+    const { repository } = z
+      .object({ repository: z.string().min(1).max(500) })
+      .parse(request.query);
+    const connection = await findAccessibleDeveloperConnection(request, id);
+    const items = await createDeveloperSourceProvider(connection, app.config).refs(repository);
+    await getPool().query(
+      "update core.developer_connections set last_used_at=now() where connection_id=$1",
+      [id],
+    );
+    await audit(request, "developer.connection.refs.listed", id);
+    return reply.send({ items });
+  });
   app.get("/developer-connections", async (request, reply) => {
     await prepare(request, app);
     requireConnectionUse(request);
@@ -172,6 +205,9 @@ export async function registerDeveloperConnectionRoutes(app: FastifyInstance) {
       !metadata["installation_id"]
     )
       throw new Error("GitHub App installation ID is required");
+    if (row.provider === "github" && row.auth_method === "github_app") {
+      await getGitHubInstallationToken(String(metadata["installation_id"]), app.config);
+    }
     const updated = await getPool().query(
       "update core.developer_connections set status='verified',metadata_json=$3::jsonb,last_verified_at=now(),updated_at=now() where connection_id=$1 and tenant_id=$2 returning *",
       [id, request.requestContext.tenant.tenantId, JSON.stringify(metadata)],
@@ -188,6 +224,11 @@ export async function registerDeveloperConnectionRoutes(app: FastifyInstance) {
     );
     if (!found.rowCount) throw new NotFoundError("Developer connection not found");
     requireConnectionManagement(request, found.rows[0]);
+    const revoked = found.rows[0];
+    if (revoked.provider === "github" && revoked.auth_method === "github_app") {
+      const installationId = (revoked.metadata_json as Record<string, unknown>)["installation_id"];
+      if (installationId) forgetGitHubInstallationToken(String(installationId));
+    }
     await getPool().query(
       "update core.developer_connections set status='revoked',credential_ciphertext=null,credential_iv=null,credential_tag=null,updated_at=now() where connection_id=$1 and tenant_id=$2",
       [id, request.requestContext.tenant.tenantId],

@@ -37,7 +37,6 @@ const requestSchema = z.object({
 });
 const connectionSchema = z.object({ author_id: z.string().min(3), token: z.string().min(20) });
 const repositorySchema = z.object({ connection_id: z.string().min(3), repository: z.string().min(3), branch: z.string().min(1).max(200), manifest_path: z.string().default("manifest/app-manifest.json") });
-const appFromGitSchema = repositorySchema.extend({ author_id: z.string().min(3) });
 const memberSchema = z.object({ user_id: z.string().min(1), role: z.enum(["owner", "manager", "developer", "licensing", "viewer"]), permissions: z.array(z.enum(AUTHOR_PERMISSIONS)).optional() });
 
 function isPlatformOperator(request: FastifyRequest) {
@@ -75,17 +74,18 @@ async function registryDelegation(app: FastifyInstance, request: FastifyRequest)
   return issueAppUserDelegation({ appId: app.config.AUTHOR_REGISTRY_APP_ID, context: request.requestContext, username: String(user.rows[0]?.email ?? request.requestContext.actor.userId), correlationId: request.id, config: app.config });
 }
 
-async function connectionWithToken(app: FastifyInstance, request: FastifyRequest, connectionId: string, permission: AuthorPermission = "author.git.manage") {
+async function connectionWithToken(app: FastifyInstance, request: FastifyRequest, connectionId: string, permission: AuthorPermission = "author.git.manage", expectedAuthorId?: string) {
   const result = await getPool().query("select * from core.author_git_connections where connection_id=$1 and status='active'", [connectionId]);
   if (!result.rowCount) throw new NotFoundError("Git connection not found");
   const row = result.rows[0];
+  if (expectedAuthorId && row.author_id !== expectedAuthorId) throw new HttpError(403, "Author scope is not available to this user", { code: "author_scope_forbidden", author_id: expectedAuthorId });
   await requireAuthorPermission(request, String(row.author_id), permission);
   const token = decryptAuthorSecret({ ciphertext: String(row.credential_ciphertext), iv: String(row.credential_iv), tag: String(row.credential_tag) }, app.config);
   return { row, token };
 }
 
-async function inspectRepository(app: FastifyInstance, request: FastifyRequest, input: z.infer<typeof repositorySchema>) {
-  const { row, token } = await connectionWithToken(app, request, input.connection_id);
+async function inspectRepository(app: FastifyInstance, request: FastifyRequest, input: z.infer<typeof repositorySchema>, expectedAuthorId?: string) {
+  const { row, token } = await connectionWithToken(app, request, input.connection_id, "author.git.manage", expectedAuthorId);
   let manifest: AppManifest | null = null;
   const errors: string[] = [];
   try {
@@ -102,17 +102,15 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
   app.get("/author-portal/overview", async (request, reply) => {
     await requireUserAuth(request, app.config);
     const userId = request.requestContext.actor.userId;
-    const [requests, profiles, apps, submissions] = await Promise.all([
+    const [requests, profiles] = await Promise.all([
       getPool().query("select * from core.author_requests where requester_user_id=$1 order by created_at desc", [userId]),
       getPool().query(`select p.*,m.role,m.permissions_json from core.author_memberships m join core.author_profiles p on p.author_id=m.author_id where m.user_id=$1 and m.status='active' order by p.display_name`, [userId]),
-      getPool().query(`select a.* from core.author_apps a join core.author_memberships m on m.author_id=a.author_id where m.user_id=$1 and m.status='active' order by a.created_at desc`, [userId]),
-      getPool().query(`select s.* from core.catalog_submissions s join core.author_memberships m on m.author_id=s.author_id where m.user_id=$1 and m.status='active' order by s.created_at desc`, [userId]),
     ]);
     return reply.send({
       requests: requests.rows,
       profiles: profiles.rows,
-      apps: apps.rows,
-      submissions: submissions.rows,
+      apps: [],
+      submissions: [],
       operating_modes: AUTHOR_OPERATING_MODES.map((mode) => ({ mode, ...policyForMode(mode) })),
       operator: isPlatformOperator(request),
       capabilities: {
@@ -223,62 +221,59 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
     if (!result.rowCount) throw new NotFoundError("Author profile not found"); await workflowEvent(request, { authorId, action: "author.profile.updated" }); return reply.send(result.rows[0]);
   });
 
-  app.get("/author-portal/profiles/:id/members", async (request, reply) => {
-    await requireUserAuth(request, app.config); const authorId = (request.params as { id: string }).id; await requireAuthorPermission(request, authorId, "author.members.manage");
+  app.get("/author-portal/authors/:authorId/members", async (request, reply) => {
+    await requireUserAuth(request, app.config); const authorId = (request.params as { authorId: string }).authorId; await requireAuthorPermission(request, authorId, "author.members.manage");
     return reply.send({ items: (await getPool().query(`select m.author_id,m.user_id,m.role,m.permissions_json,m.status,m.created_at,u.email from core.author_memberships m join core.users u on u.id=m.user_id where m.author_id=$1 order by u.email`, [authorId])).rows });
   });
 
-  app.put("/author-portal/profiles/:id/members", async (request, reply) => {
-    await requireUserAuth(request, app.config); const authorId = (request.params as { id: string }).id; await requireAuthorPermission(request, authorId, "author.members.manage"); const body = memberSchema.parse(request.body);
+  app.put("/author-portal/authors/:authorId/members", async (request, reply) => {
+    await requireUserAuth(request, app.config); const authorId = (request.params as { authorId: string }).authorId; await requireAuthorPermission(request, authorId, "author.members.manage"); const body = memberSchema.parse(request.body);
     const permissions = body.permissions ?? AUTHOR_ROLE_PERMISSIONS[body.role as AuthorRole];
     const result = await getPool().query(`insert into core.author_memberships(author_id,user_id,role,permissions_json,created_by) values($1,$2,$3,$4::jsonb,$5) on conflict(author_id,user_id) do update set role=excluded.role,permissions_json=excluded.permissions_json,status='active',updated_at=now() returning *`, [authorId, body.user_id, body.role, JSON.stringify(permissions), request.requestContext.actor.userId]);
     await workflowEvent(request, { authorId, action: "author.membership.saved", metadata: { user_id: body.user_id, role: body.role } }); return reply.send(result.rows[0]);
   });
 
-  app.get("/author-portal/git-connections", async (request, reply) => {
-    await requireUserAuth(request, app.config);
-    const authorId = z.string().optional().parse((request.query as { author_id?: string }).author_id); if (authorId) await requireAuthorPermission(request, authorId, "author.audit.read");
-    const result = await getPool().query(`select c.connection_id,c.author_id,c.provider,c.account_login,c.status,c.metadata_json,c.last_verified_at,c.created_at from core.author_git_connections c join core.author_memberships m on m.author_id=c.author_id where m.user_id=$1 and m.status='active' and ($2::text is null or c.author_id=$2) order by c.created_at desc`, [request.requestContext.actor.userId, authorId ?? null]);
+  app.get("/author-portal/authors/:authorId/git-connections", async (request, reply) => {
+    await requireUserAuth(request, app.config); const authorId = (request.params as { authorId: string }).authorId; await requireAuthorPermission(request, authorId, "author.audit.read");
+    const result = await getPool().query(`select c.connection_id,c.author_id,c.provider,c.account_login,c.status,c.metadata_json,c.last_verified_at,c.created_at from core.author_git_connections c where c.author_id=$1 order by c.created_at desc`, [authorId]);
     return reply.send({ items: result.rows });
   });
 
-  app.post("/author-portal/git-connections/github", async (request, reply) => {
-    await requireUserAuth(request, app.config); const body = connectionSchema.parse(request.body); await requireAuthorPermission(request, body.author_id, "author.git.manage");
+  app.post("/author-portal/authors/:authorId/git-connections/github", async (request, reply) => {
+    await requireUserAuth(request, app.config); const authorId = (request.params as { authorId: string }).authorId; const body = connectionSchema.omit({ author_id: true }).parse(request.body); await requireAuthorPermission(request, authorId, "author.git.manage");
     const identity = await verifyGitHubConnection(body.token); const encrypted = encryptAuthorSecret(body.token, app.config); const connectionId = id("git");
-    const result = await getPool().query(`insert into core.author_git_connections(connection_id,author_id,provider,account_login,credential_ciphertext,credential_iv,credential_tag,metadata_json,last_verified_at,created_by) values($1,$2,'github',$3,$4,$5,$6,$7::jsonb,now(),$8) on conflict(author_id,provider,account_login) do update set credential_ciphertext=excluded.credential_ciphertext,credential_iv=excluded.credential_iv,credential_tag=excluded.credential_tag,status='active',last_verified_at=now(),updated_at=now() returning connection_id,author_id,provider,account_login,status,metadata_json,last_verified_at,created_at`, [connectionId, body.author_id, identity.login, encrypted.ciphertext, encrypted.iv, encrypted.tag, JSON.stringify({ github_user_id: identity.id, avatar_url: identity.avatar_url }), request.requestContext.actor.userId]);
-    await workflowEvent(request, { authorId: body.author_id, action: "author.git.connected", metadata: { provider: "github", account_login: identity.login } }); return reply.code(201).send(result.rows[0]);
+    const result = await getPool().query(`insert into core.author_git_connections(connection_id,author_id,provider,account_login,credential_ciphertext,credential_iv,credential_tag,metadata_json,last_verified_at,created_by) values($1,$2,'github',$3,$4,$5,$6,$7::jsonb,now(),$8) on conflict(author_id,provider,account_login) do update set credential_ciphertext=excluded.credential_ciphertext,credential_iv=excluded.credential_iv,credential_tag=excluded.credential_tag,status='active',last_verified_at=now(),updated_at=now() returning connection_id,author_id,provider,account_login,status,metadata_json,last_verified_at,created_at`, [connectionId, authorId, identity.login, encrypted.ciphertext, encrypted.iv, encrypted.tag, JSON.stringify({ github_user_id: identity.id, avatar_url: identity.avatar_url }), request.requestContext.actor.userId]);
+    await workflowEvent(request, { authorId, action: "author.git.connected", metadata: { provider: "github", account_login: identity.login } }); return reply.code(201).send(result.rows[0]);
   });
 
-  app.delete("/author-portal/git-connections/:id", async (request, reply) => {
-    await requireUserAuth(request, app.config); const connectionId = (request.params as { id: string }).id; const found = await getPool().query("select author_id from core.author_git_connections where connection_id=$1", [connectionId]); if (!found.rowCount) throw new NotFoundError("Git connection not found"); const authorId = String(found.rows[0].author_id); await requireAuthorPermission(request, authorId, "author.git.manage");
+  app.delete("/author-portal/authors/:authorId/git-connections/:id", async (request, reply) => {
+    await requireUserAuth(request, app.config); const { authorId, id: connectionId } = request.params as { authorId: string; id: string }; const found = await getPool().query("select author_id from core.author_git_connections where connection_id=$1 and author_id=$2", [connectionId, authorId]); if (!found.rowCount) throw new NotFoundError("Git connection not found"); await requireAuthorPermission(request, authorId, "author.git.manage");
     await getPool().query("update core.author_git_connections set status='revoked',credential_ciphertext='',credential_iv='',credential_tag='',updated_at=now() where connection_id=$1", [connectionId]); await workflowEvent(request, { authorId, action: "author.git.disconnected", metadata: { connection_id: connectionId } }); return reply.code(204).send();
   });
 
-  app.get("/author-portal/git-connections/:id/repositories", async (request, reply) => {
-    await requireUserAuth(request, app.config); const connectionId = (request.params as { id: string }).id; const { row, token } = await connectionWithToken(app, request, connectionId); const repositories = await listGitHubRepositories(token);
+  app.get("/author-portal/authors/:authorId/git-connections/:id/repositories", async (request, reply) => {
+    await requireUserAuth(request, app.config); const { authorId, id: connectionId } = request.params as { authorId: string; id: string }; const { row, token } = await connectionWithToken(app, request, connectionId, "author.git.manage", authorId); const repositories = await listGitHubRepositories(token);
     await workflowEvent(request, { authorId: String(row.author_id), action: "author.git.repositories.read", metadata: { connection_id: connectionId, count: repositories.length } });
     return reply.send({ items: repositories.map((repo) => ({ ...repo, visibility: repo.private ? "private" : "public", accessible: true })) });
   });
 
-  app.post("/author-portal/repositories/inspect", async (request, reply) => { await requireUserAuth(request, app.config); return reply.send(await inspectRepository(app, request, repositorySchema.parse(request.body))); });
+  app.post("/author-portal/authors/:authorId/repositories/inspect", async (request, reply) => { await requireUserAuth(request, app.config); const authorId = (request.params as { authorId: string }).authorId; return reply.send(await inspectRepository(app, request, repositorySchema.parse(request.body), authorId)); });
 
-  app.get("/author-portal/apps", async (request, reply) => {
-    await requireUserAuth(request, app.config);
-    const query = z.object({ scope: z.enum(["workspace", "registry"]).optional(), author_id: z.string().optional() }).parse(request.query);
-    const operator = query.scope === "registry" && (hasPlatformPrivilege(request, "platform.catalog.manage") || hasPlatformPrivilege(request, "platform.apps.runtime.manage"));
-    if (query.scope === "registry") requireInstanceCapability(app.config, "officialAuthorRegistry");
-    if (query.scope === "registry" && !operator) throw new ForbiddenError();
-    if (query.author_id) await requireAuthorPermission(request, query.author_id, "author.audit.read");
-    const result = operator
-      ? await getPool().query(`select a.*,p.operating_mode,coalesce(m.permissions_json,'[]'::jsonb) as member_permissions_json from core.author_apps a join core.author_profiles p on p.author_id=a.author_id left join core.author_memberships m on m.author_id=a.author_id and m.user_id=$1 and m.status='active' order by a.created_at desc`, [request.requestContext.actor.userId])
-      : await getPool().query(`select a.*,p.operating_mode,m.permissions_json as member_permissions_json from core.author_apps a join core.author_profiles p on p.author_id=a.author_id join core.author_memberships m on m.author_id=a.author_id where m.user_id=$1 and m.status='active' and ($2::text is null or a.author_id=$2) order by a.created_at desc`, [request.requestContext.actor.userId, query.author_id ?? null]);
+  app.get("/author-portal/authors/:authorId/apps", async (request, reply) => {
+    await requireUserAuth(request, app.config); const authorId = (request.params as { authorId: string }).authorId; await requireAuthorPermission(request, authorId, "author.apps.read");
+    const result = await getPool().query(`select a.*,p.operating_mode,m.permissions_json as member_permissions_json from core.author_apps a join core.author_profiles p on p.author_id=a.author_id join core.author_memberships m on m.author_id=a.author_id where a.author_id=$1 and m.user_id=$2 and m.status='active' order by a.created_at desc`, [authorId, request.requestContext.actor.userId]);
     return reply.send({ items: result.rows });
   });
 
-  app.post("/author-portal/apps/from-git", async (request, reply) => {
-    await requireUserAuth(request, app.config); const body = appFromGitSchema.parse(request.body); await requireAuthorPermission(request, body.author_id, "author.apps.create");
-    const profile = await getPool().query("select operating_mode,external_issuer_url from core.author_profiles where author_id=$1 and status='active'", [body.author_id]); if (!profile.rowCount) throw new NotFoundError("Author profile not found");
-    const inspected = await inspectRepository(app, request, body); const manifest = inspected.manifest; const appId = typeof manifest?.["app_id"] === "string" ? manifest["app_id"] : null;
+  app.get("/author-portal/admin/apps", async (request, reply) => {
+    await requireUserAuth(request, app.config); if (!hasPlatformPrivilege(request, "platform.catalog.manage") && !hasPlatformPrivilege(request, "platform.apps.runtime.manage")) throw new ForbiddenError();
+    return reply.send({ items: (await getPool().query(`select a.*,p.operating_mode,'[]'::jsonb as member_permissions_json from core.author_apps a join core.author_profiles p on p.author_id=a.author_id order by a.created_at desc`)).rows });
+  });
+
+  app.post("/author-portal/authors/:authorId/apps/from-git", async (request, reply) => {
+    await requireUserAuth(request, app.config); const authorId = (request.params as { authorId: string }).authorId; const input = repositorySchema.parse(request.body); const body = { ...input, author_id: authorId }; await requireAuthorPermission(request, authorId, "author.apps.create");
+    const profile = await getPool().query("select operating_mode,external_issuer_url from core.author_profiles where author_id=$1 and status='active'", [authorId]); if (!profile.rowCount) throw new NotFoundError("Author profile not found");
+    const inspected = await inspectRepository(app, request, body, authorId); const manifest = inspected.manifest; const appId = typeof manifest?.["app_id"] === "string" ? manifest["app_id"] : null;
     const errors = [...inspected.errors]; if (appId && !appId.startsWith(`${body.author_id}/`)) errors.push("Manifest app_id must use the approved author_id namespace");
     const mode = profile.rows[0].operating_mode as AuthorOperatingMode; const policy = policyForMode(mode); const authorAppId = id("aap");
     const displayName = typeof manifest?.["app_name"] === "string" ? manifest["app_name"] : body.repository.split("/").at(-1) ?? "Application";
@@ -287,7 +282,14 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
     await workflowEvent(request, { authorId: body.author_id, appId: authorAppId, action: "author.app.created_from_git", to: String(result.rows[0].status), metadata: { repository: body.repository, valid: errors.length === 0 } }); return reply.code(201).send(result.rows[0]);
   });
 
-  app.post("/author-portal/apps/:id/action", async (request, reply) => {
+  app.post("/author-portal/authors/:authorId/apps/:id/action", async (request, reply) => {
+    await requireUserAuth(request, app.config); const { authorId, id: authorAppId } = request.params as { authorId: string; id: string }; const body = z.object({ action: z.enum(["submit", "request_runtime"]), notes: z.string().max(3000).optional() }).parse(request.body);
+    const found = await getPool().query(`select a.*,p.operating_mode from core.author_apps a join core.author_profiles p on p.author_id=a.author_id where a.author_app_id=$1 and a.author_id=$2`, [authorAppId, authorId]); if (!found.rowCount) throw new NotFoundError("Author application not found"); const row = found.rows[0]; await requireAuthorPermission(request, authorId, "author.apps.submit");
+    if (body.action === "request_runtime") requireInstanceCapability(app.config, "hostedRuntime"); const target = body.action === "submit" ? "submitted" : "runtime_pending"; if (body.action === "request_runtime" && row.operating_mode !== "talpaversum_hosted") throw new HttpError(409, "Only Talpaversum-hosted applications can request Talpaversum runtime approval");
+    assertWorkflowTransition("app", String(row.status), target); const result = await getPool().query("update core.author_apps set status=$3,review_notes=$4,updated_at=now() where author_app_id=$1 and author_id=$2 returning *", [authorAppId, authorId, target, body.notes ?? null]); await workflowEvent(request, { authorId, appId: authorAppId, action: `author.app.${body.action}`, from: String(row.status), to: target }); return reply.send(result.rows[0]);
+  });
+
+  app.post("/author-portal/admin/apps/:id/action", async (request, reply) => {
     await requireUserAuth(request, app.config); const authorAppId = (request.params as { id: string }).id; const body = z.object({ action: z.enum(["submit", "approve", "reject", "request_runtime", "approve_runtime", "mark_running", "disable"]), notes: z.string().max(3000).optional() }).parse(request.body);
     const found = await getPool().query(`select a.*,p.operating_mode from core.author_apps a join core.author_profiles p on p.author_id=a.author_id where a.author_app_id=$1`, [authorAppId]); if (!found.rowCount) throw new NotFoundError("Author application not found"); const row = found.rows[0]; const from = String(row.status);
     const catalogAction = ["approve", "reject"].includes(body.action);
@@ -296,21 +298,25 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
     if (body.action === "request_runtime" || runtimeAction) requireInstanceCapability(app.config, "hostedRuntime");
     if (catalogAction && !hasPlatformPrivilege(request, "platform.catalog.manage")) throw new ForbiddenError();
     if (runtimeAction && !hasPlatformPrivilege(request, "platform.apps.runtime.manage")) throw new ForbiddenError();
-    if (!catalogAction && !runtimeAction) await requireAuthorPermission(request, String(row.author_id), "author.apps.submit");
+    if (!catalogAction && !runtimeAction) throw new ForbiddenError();
     const target = { submit: "submitted", approve: "approved", reject: "rejected", request_runtime: "runtime_pending", approve_runtime: "runtime_approved", mark_running: "running", disable: "disabled" }[body.action];
     if (body.action === "request_runtime" && row.operating_mode !== "talpaversum_hosted") throw new HttpError(409, "Only Talpaversum-hosted applications can request Talpaversum runtime approval");
     assertWorkflowTransition("app", from, target); const result = await getPool().query("update core.author_apps set status=$2,review_notes=$3,updated_at=now() where author_app_id=$1 returning *", [authorAppId, target, body.notes ?? null]); await workflowEvent(request, { authorId: String(row.author_id), appId: authorAppId, action: `author.app.${body.action}`, from, to: target, metadata: { notes: body.notes } }); return reply.send(result.rows[0]);
   });
 
-  app.post("/author-portal/apps/:id/catalog-submission", async (request, reply) => {
-    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialCatalogPublishing"); const authorAppId = (request.params as { id: string }).id; const found = await getPool().query(`select a.*,p.operating_mode,p.registry_status from core.author_apps a join core.author_profiles p on p.author_id=a.author_id where a.author_app_id=$1`, [authorAppId]); if (!found.rowCount) throw new NotFoundError("Author application not found"); const row = found.rows[0]; await requireAuthorPermission(request, String(row.author_id), "author.apps.publish");
+  app.post("/author-portal/authors/:authorId/apps/:id/catalog-submission", async (request, reply) => {
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialCatalogPublishing"); const { authorId, id: authorAppId } = request.params as { authorId: string; id: string }; const found = await getPool().query(`select a.*,p.operating_mode,p.registry_status from core.author_apps a join core.author_profiles p on p.author_id=a.author_id where a.author_app_id=$1 and a.author_id=$2`, [authorAppId, authorId]); if (!found.rowCount) throw new NotFoundError("Author application not found"); const row = found.rows[0]; await requireAuthorPermission(request, authorId, "author.apps.publish");
     const policy = policyForMode(row.operating_mode as AuthorOperatingMode); const eligibility = { official_catalog_eligible: policy.officialCatalogEligible, registry_active: row.registry_status === "active", manifest_valid: (row.manifest_errors_json as unknown[]).length === 0, app_approved: ["approved", "runtime_approved", "running", "published"].includes(String(row.status)) };
     if (!Object.values(eligibility).every(Boolean)) throw new HttpError(409, "Application is not eligible for official catalog submission", eligibility);
     const submissionId = id("sub"); const result = await getPool().query(`insert into core.catalog_submissions(submission_id,author_app_id,author_id,status,eligibility_json,submitted_by,submitted_at) values($1,$2,$3,'submitted',$4::jsonb,$5,now()) returning *`, [submissionId, authorAppId, row.author_id, JSON.stringify(eligibility), request.requestContext.actor.userId]); await workflowEvent(request, { authorId: String(row.author_id), appId: authorAppId, submissionId, action: "author.catalog.submitted", to: "submitted", metadata: eligibility }); return reply.code(201).send(result.rows[0]);
   });
 
-  app.get("/author-portal/catalog-submissions", async (request, reply) => {
-    await requireUserAuth(request, app.config); const query = z.object({ scope: z.enum(["workspace", "registry"]).optional(), author_id: z.string().optional() }).parse(request.query); const operator = query.scope === "registry" && hasPlatformPrivilege(request, "platform.catalog.manage"); if (query.scope === "registry") requireInstanceCapability(app.config, "officialCatalogReview"); if (query.scope === "registry" && !operator) throw new ForbiddenError(); if (query.author_id) await requireAuthorPermission(request, query.author_id, "author.apps.read"); const result = operator ? await getPool().query(`select s.*,a.display_name,a.app_id,p.operating_mode from core.catalog_submissions s join core.author_apps a on a.author_app_id=s.author_app_id join core.author_profiles p on p.author_id=s.author_id order by s.created_at desc`) : await getPool().query(`select s.*,a.display_name,a.app_id,p.operating_mode from core.catalog_submissions s join core.author_apps a on a.author_app_id=s.author_app_id join core.author_profiles p on p.author_id=s.author_id join core.author_memberships m on m.author_id=s.author_id where m.user_id=$1 and m.status='active' and ($2::text is null or s.author_id=$2) order by s.created_at desc`, [request.requestContext.actor.userId, query.author_id ?? null]); return reply.send({ items: result.rows, operator });
+  app.get("/author-portal/authors/:authorId/catalog-submissions", async (request, reply) => {
+    await requireUserAuth(request, app.config); const authorId = (request.params as { authorId: string }).authorId; await requireAuthorPermission(request, authorId, "author.apps.read"); const result = await getPool().query(`select s.*,a.display_name,a.app_id,p.operating_mode from core.catalog_submissions s join core.author_apps a on a.author_app_id=s.author_app_id join core.author_profiles p on p.author_id=s.author_id where s.author_id=$1 order by s.created_at desc`, [authorId]); return reply.send({ items: result.rows, operator: false });
+  });
+
+  app.get("/author-portal/admin/catalog-submissions", async (request, reply) => {
+    await requireUserAuth(request, app.config); requireInstanceCapability(app.config, "officialCatalogReview"); if (!hasPlatformPrivilege(request, "platform.catalog.manage")) throw new ForbiddenError(); return reply.send({ items: (await getPool().query(`select s.*,a.display_name,a.app_id,p.operating_mode from core.catalog_submissions s join core.author_apps a on a.author_app_id=s.author_app_id join core.author_profiles p on p.author_id=s.author_id order by s.created_at desc`)).rows, operator: true });
   });
 
   app.post("/author-portal/admin/catalog-submissions/:id/action", async (request, reply) => {
@@ -318,7 +324,7 @@ export async function registerAuthorPortalRoutes(app: FastifyInstance) {
     const result = await getPool().query("update core.catalog_submissions set status=$2,review_notes=$3,reviewed_by=$4,reviewed_at=now(),published_at=case when $2='published' then now() else published_at end,updated_at=now() where submission_id=$1 returning *", [submissionId, target, body.notes ?? null, request.requestContext.actor.userId]); if (target === "published") await getPool().query("update core.author_apps set status='published',updated_at=now() where author_app_id=$1", [row.author_app_id]); await workflowEvent(request, { authorId: String(row.author_id), appId: String(row.author_app_id), submissionId, action: `author.catalog.${body.action}`, from, to: target, metadata: { notes: body.notes } }); return reply.send(result.rows[0]);
   });
 
-  app.get("/author-portal/activity", async (request, reply) => {
-    await requireUserAuth(request, app.config); const authorId = z.string().optional().parse((request.query as { author_id?: string }).author_id); if (authorId) await requireAuthorPermission(request, authorId, "author.audit.read"); const result = authorId ? await getPool().query("select * from core.author_workflow_events where author_id=$1 order by created_at desc limit 300", [authorId]) : await getPool().query(`select e.* from core.author_workflow_events e left join core.author_memberships m on m.author_id=e.author_id and m.user_id=$1 where e.actor_user_id=$1 or m.user_id=$1 order by e.created_at desc limit 300`, [request.requestContext.actor.userId]); return reply.send({ items: result.rows });
+  app.get("/author-portal/authors/:authorId/activity", async (request, reply) => {
+    await requireUserAuth(request, app.config); const authorId = (request.params as { authorId: string }).authorId; await requireAuthorPermission(request, authorId, "author.audit.read"); const result = await getPool().query("select * from core.author_workflow_events where author_id=$1 order by created_at desc limit 300", [authorId]); return reply.send({ items: result.rows });
   });
 }

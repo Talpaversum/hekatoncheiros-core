@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { SignJWT } from "jose";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import { getPool } from "../src/db/pool.js";
@@ -12,7 +12,8 @@ describe("DELETE /api/v1/apps/installed/:app_id", () => {
 
   beforeAll(async () => {
     process.env["NODE_ENV"] = "test";
-    process.env["DATABASE_URL"] = process.env["DATABASE_URL"] ?? "postgres://hc_user:hc_password@localhost:5432/hc_core";
+    process.env["DATABASE_URL"] =
+      process.env["DATABASE_URL"] ?? "postgres://hc_user:hc_password@localhost:5432/hc_core";
     process.env["JWT_SECRET"] = "supersecretkeysupersecret";
     process.env["JWT_ISSUER"] = "hekatoncheiros-core";
     process.env["JWT_AUDIENCE_USER"] = "hc-user";
@@ -25,6 +26,10 @@ describe("DELETE /api/v1/apps/installed/:app_id", () => {
   afterAll(async () => {
     const pool = getPool();
     await pool.query("delete from core.user_privileges where user_id = $1", [testUserId]);
+  });
+
+  afterEach(async () => {
+    await getPool().query("delete from core.installed_apps where app_id like 'test.uninstall.%'");
   });
 
   it("removes app from DB and subsequent GET /apps/installed no longer returns it", async () => {
@@ -67,7 +72,17 @@ describe("DELETE /api/v1/apps/installed/:app_id", () => {
         manifest_json = excluded.manifest_json,
         enabled = true,
         updated_at = now()`,
-      [appId, slug, "Test Uninstall App", baseUrl, `/api/v1/apps/${slug}/ui/plugin.js`, "sha256-test", [], "[]", "{}"],
+      [
+        appId,
+        slug,
+        "Test Uninstall App",
+        baseUrl,
+        `/api/v1/apps/${slug}/ui/plugin.js`,
+        "sha256-test",
+        [],
+        "[]",
+        "{}",
+      ],
     );
 
     await pool.query(
@@ -92,9 +107,14 @@ describe("DELETE /api/v1/apps/installed/:app_id", () => {
       headers: { authorization: `Bearer ${token}` },
     });
     const beforeDeletePayload = beforeDeleteResponse.json() as {
-      items: Array<{ app_id: string; managed_runtime: { compose_project: string; service_name: string } | null }>;
+      items: Array<{
+        app_id: string;
+        managed_runtime: { compose_project: string; service_name: string } | null;
+      }>;
     };
-    expect(beforeDeletePayload.items.find((item) => item.app_id === appId)?.managed_runtime).toMatchObject({
+    expect(
+      beforeDeletePayload.items.find((item) => item.app_id === appId)?.managed_runtime,
+    ).toMatchObject({
       compose_project: "hc-test-runtime",
       service_name: "test-app",
     });

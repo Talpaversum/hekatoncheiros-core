@@ -29,3 +29,19 @@ export async function readUiPluginArtifact(config: EnvConfig, slug: string): Pro
   const filePath = getUiPluginPath(config, slug);
   return readFile(filePath);
 }
+
+export async function getUiPluginArtifactStatus(
+  config: EnvConfig,
+  slug: string,
+  expectedSha256: string,
+): Promise<"ready" | "missing" | "invalid"> {
+  try {
+    const content = await readUiPluginArtifact(config, slug);
+    return createHash("sha256").update(content).digest("hex") === expectedSha256
+      ? "ready"
+      : "invalid";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    return "invalid";
+  }
+}

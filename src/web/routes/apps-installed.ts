@@ -2,7 +2,13 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { hasPrivilege } from "../../access/privileges.js";
+import {
+  computeAppAvailability,
+  type LicenseStatus,
+  type UiIntegrationStatus,
+} from "../../apps/app-availability.js";
 import { getAppCatalogStore } from "../../apps/app-catalog-store.js";
+import { runAppDiagnostics } from "../../apps/app-diagnostics.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { installFetchedApp } from "../../apps/app-installer.js";
 import {
@@ -10,7 +16,11 @@ import {
   removeDockerComposeAppRuntime,
   stopDockerComposeAppRuntime,
 } from "../../apps/app-runtime-docker-compose.js";
-import { getAppRuntimeHealth } from "../../apps/app-runtime-health.js";
+import {
+  getAppRuntimeHealth,
+  markAppRuntimeStopped,
+  persistAppRuntimeHealth,
+} from "../../apps/app-runtime-health.js";
 import {
   getAppRuntimeInstallation,
   listAppRuntimeInstallations,
@@ -21,6 +31,7 @@ import {
   issueAppRuntimeToken,
 } from "../../apps/app-runtime-token.js";
 import { fetchManifest } from "../../apps/manifest-fetcher.js";
+import { getUiPluginArtifactStatus } from "../../apps/ui-artifact-storage.js";
 import { recordAudit } from "../../audit/audit-service.js";
 import { getPool } from "../../db/pool.js";
 import {
@@ -39,13 +50,20 @@ const fetchManifestSchema = z.object({
 
 const installSchema = z.object({
   base_url: z.string().url(),
-  expected_manifest_hash: z.string().trim().regex(/^[a-f0-9]{64}$/i),
+  expected_manifest_hash: z
+    .string()
+    .trim()
+    .regex(/^[a-f0-9]{64}$/i),
 });
 
 const updateSignalSchema = z.object({
   source: z.enum(["app", "feed", "manual"]).default("app"),
   app_version: z.string().trim().min(1).max(120).optional(),
-  manifest_hash: z.string().trim().regex(/^[a-f0-9]{64}$/i).optional(),
+  manifest_hash: z
+    .string()
+    .trim()
+    .regex(/^[a-f0-9]{64}$/i)
+    .optional(),
   manifest_url: z.string().trim().url().optional(),
   note: z.string().trim().max(500).optional(),
 });
@@ -132,7 +150,9 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
       listAppRuntimeInstallations(),
     ]);
     const catalogByAppId = new Map(catalogEntries.map((entry) => [entry.app_id, entry]));
-    const runtimeByAppId = new Map(runtimeInstallations.map((runtime) => [runtime.app_id, runtime]));
+    const runtimeByAppId = new Map(
+      runtimeInstallations.map((runtime) => [runtime.app_id, runtime]),
+    );
     const updateSignalsResult = await getPool().query(
       `select app_id, source, reported_app_version, reported_manifest_hash, reported_manifest_url, note,
               reported_at, verified_author_id, signature_expires_at
@@ -165,8 +185,43 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
           hasAnyTenantLicense(tenantId, installedApp.app_id),
         ]);
 
+        const runtimeHealth = getAppRuntimeHealth(installedApp.app_id);
+        const installationStatus =
+          installedApp.enabled === false ? ("disabled" as const) : ("installed" as const);
+        const licenseStatus: LicenseStatus =
+          installedApp.manifest.licensing?.required !== true
+            ? "not_required"
+            : selectedLicense
+              ? "active"
+              : anyLicense
+                ? "invalid"
+                : "missing";
+        const uiStatus: UiIntegrationStatus =
+          installedApp.ui_url && installedApp.ui_integrity
+            ? await getUiPluginArtifactStatus(config, installedApp.slug, installedApp.ui_integrity)
+            : "missing";
+        const managedRuntime = runtimeByAppId.get(installedApp.app_id) ?? null;
+        const runtimeManagementStatus = !managedRuntime
+          ? "external"
+          : runtimeHealth.status === "stopped"
+            ? "managed_stopped"
+            : runtimeHealth.status === "unreachable"
+              ? "managed_failed"
+              : "managed_running";
+        const availability = computeAppAvailability({
+          installationStatus,
+          runtimeHealth: runtimeHealth.status,
+          licenseStatus,
+          uiStatus,
+        });
+
         return {
           ...installedApp,
+          installation_status: installationStatus,
+          license_status: licenseStatus,
+          ui_status: uiStatus,
+          runtime_management_status: runtimeManagementStatus,
+          ...availability,
           catalog_update: catalogByAppId.has(installedApp.app_id)
             ? (() => {
                 const entry = catalogByAppId.get(installedApp.app_id)!;
@@ -208,8 +263,9 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
                 };
               })()
             : null,
-          managed_runtime: runtimeByAppId.get(installedApp.app_id) ?? null,
-          runtime_health: getAppRuntimeHealth(installedApp.app_id),
+          managed_runtime: managedRuntime,
+          runtime_health: runtimeHealth,
+          last_health_check: runtimeHealth.checked_at ? runtimeHealth : null,
           resolved_entitlement: selectedLicense
             ? {
                 entitlement_id: selectedLicense.jti,
@@ -230,6 +286,42 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
     return reply.send({
       items,
     });
+  });
+
+  app.post("/apps/installed/:app_id/diagnostics", async (request, reply) => {
+    const config = app.config;
+    await requireUserAuth(request, config);
+    if (!hasPrivilege(request.requestContext.privileges, "platform.apps.manage"))
+      throw new ForbiddenError();
+    const appId = (request.params as { app_id: string }).app_id;
+    const installed = await getAppInstallationStore().getApp(appId);
+    if (!installed) throw new NotFoundError("App not installed");
+    const tenantId = request.requestContext.tenant.tenantId;
+    const [selectedLicense, anyLicense] = await Promise.all([
+      getSelectedTenantLicense(tenantId, appId),
+      hasAnyTenantLicense(tenantId, appId),
+    ]);
+    const licenseStatus: LicenseStatus =
+      installed.manifest.licensing?.required !== true
+        ? "not_required"
+        : selectedLicense
+          ? "active"
+          : anyLicense
+            ? "invalid"
+            : "missing";
+    const uiStatus: UiIntegrationStatus =
+      installed.ui_url && installed.ui_integrity
+        ? await getUiPluginArtifactStatus(config, installed.slug, installed.ui_integrity)
+        : "missing";
+    const result = await runAppDiagnostics({
+      app: installed,
+      timeoutMs: config.APP_RUNTIME_HEALTH_TIMEOUT_MS,
+      failureThreshold: 1,
+      licenseStatus,
+      uiStatus,
+      trustedOrigin: await isTrustedOrigin(new URL(installed.base_url).origin),
+    });
+    return reply.send({ app_id: appId, ...result });
   });
 
   app.post("/apps/installed", async (request, reply) => {
@@ -325,7 +417,9 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
 
     const manifestAppId = fetched.manifest["app_id"];
     if (manifestAppId !== appId) {
-      return reply.code(409).send({ message: "refreshed manifest app_id does not match installed app" });
+      return reply
+        .code(409)
+        .send({ message: "refreshed manifest app_id does not match installed app" });
     }
 
     try {
@@ -336,7 +430,10 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
         actorUserId: request.requestContext.actor.userId,
         effectiveUserId: request.requestContext.actor.effectiveUserId,
       });
-      await getPool().query("update core.app_update_signals set cleared_at = now() where app_id = $1", [appId]);
+      await getPool().query(
+        "update core.app_update_signals set cleared_at = now() where app_id = $1",
+        [appId],
+      );
       return reply.send({
         ...result,
         refreshed_at: new Date().toISOString(),
@@ -369,13 +466,17 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
 
     const manifestAppId = fetched.manifest["app_id"];
     if (manifestAppId !== appId) {
-      return reply.code(409).send({ message: "fetched manifest app_id does not match installed app" });
+      return reply
+        .code(409)
+        .send({ message: "fetched manifest app_id does not match installed app" });
     }
 
     return reply.send({
       app_id: appId,
       checked_at: new Date().toISOString(),
-      update_available: installed.manifest_hash ? installed.manifest_hash !== fetched.manifestHash : null,
+      update_available: installed.manifest_hash
+        ? installed.manifest_hash !== fetched.manifestHash
+        : null,
       installed: {
         app_version: installed.app_version ?? null,
         manifest_hash: installed.manifest_hash ?? null,
@@ -573,6 +674,7 @@ export async function registerInstalledAppRoutes(app: FastifyInstance) {
           service_name: runtimeInstallation.service_name,
         },
       });
+      await persistAppRuntimeHealth(appId, markAppRuntimeStopped(appId));
 
       await recordAudit({
         tenantId: request.requestContext.tenant.tenantId,

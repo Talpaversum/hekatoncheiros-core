@@ -33,7 +33,21 @@ export async function registerAppProxyRoutes(app: FastifyInstance) {
 
     const runtime = getAppRuntimeHealth(appInfo.app_id);
     if (runtime.status !== "healthy" && runtime.status !== "degraded") {
-      return reply.code(503).type("application/problem+json").send({ type: "https://hekatoncheiros.dev/problems/application-unavailable", title: "Application unavailable", status: 503, detail: "The requested application is currently unavailable.", appId: appInfo.app_id, runtimeStatus: runtime.status });
+      const availabilityReason =
+        runtime.status === "stopped" ? "runtime_stopped" : "runtime_unreachable";
+      return reply
+        .code(503)
+        .type("application/problem+json")
+        .send({
+          type: "https://hekatoncheiros.dev/problems/application-unavailable",
+          title: "Application unavailable",
+          status: 503,
+          detail: runtime.error_message ?? "Core cannot reach the application health endpoint.",
+          appId: appInfo.app_id,
+          runtimeStatus: runtime.status,
+          availability: "unavailable",
+          availabilityReason,
+        });
     }
 
     if (!hasAllPrivileges(request.requestContext.privileges, appInfo.required_privileges)) {
@@ -41,23 +55,40 @@ export async function registerAppProxyRoutes(app: FastifyInstance) {
         tenantId: request.requestContext.tenant.tenantId,
         actorUserId: request.requestContext.actor.userId,
         effectiveUserId: request.requestContext.actor.effectiveUserId,
-        actorType: "user", applicationId: appInfo.app_id, sourceService: "core",
-        eventType: appInfo.app_id === "com.talpaversum.inventory" ? "inventory.operation.denied" : "app.operation.denied",
-        category: "authorization", action: "app.proxy.access", outcome: "denied", severity: "warning",
-        scope: "tenant", visibility: "tenant_admin", resourceType: "application", resourceId: appInfo.app_id,
-        message: "Application operation denied", metadata: { required_privileges: appInfo.required_privileges },
+        actorType: "user",
+        applicationId: appInfo.app_id,
+        sourceService: "core",
+        eventType:
+          appInfo.app_id === "com.talpaversum.inventory"
+            ? "inventory.operation.denied"
+            : "app.operation.denied",
+        category: "authorization",
+        action: "app.proxy.access",
+        outcome: "denied",
+        severity: "warning",
+        scope: "tenant",
+        visibility: "tenant_admin",
+        resourceType: "application",
+        resourceId: appInfo.app_id,
+        message: "Application operation denied",
+        metadata: { required_privileges: appInfo.required_privileges },
         ...getAuditRequestMetadata(request),
       });
       throw new ForbiddenError();
     }
 
     if (requiresLicense(appInfo)) {
-      const hasLicense = await hasSelectedActiveLicense(request.requestContext.tenant.tenantId, appInfo.app_id);
+      const hasLicense = await hasSelectedActiveLicense(
+        request.requestContext.tenant.tenantId,
+        appInfo.app_id,
+      );
       if (!hasLicense) {
         return reply.code(402).send({
           message: "License required",
           code: "license_required",
           app_id: appInfo.app_id,
+          availability: "blocked",
+          availability_reason: "license_missing",
         });
       }
     }
@@ -79,7 +110,9 @@ export async function registerAppProxyRoutes(app: FastifyInstance) {
     ]);
     const username = String(userResult.rows[0]?.email ?? request.requestContext.actor.userId);
     const authorMatch = forwardPath.match(/^\/v1\/admin\/authors\/([^/]+)(?:\/|$)/);
-    let authorScope: { authorId: string; permissions: string[]; operatorScope?: string[] } | undefined;
+    let authorScope:
+      | { authorId: string; permissions: string[]; operatorScope?: string[] }
+      | undefined;
     if (authorMatch) {
       const authorId = decodeURIComponent(authorMatch[1]);
       const membership = await getPool().query(
@@ -87,7 +120,8 @@ export async function registerAppProxyRoutes(app: FastifyInstance) {
         [authorId, request.requestContext.actor.userId],
       );
       const operator = request.requestContext.privileges.includes("platform.superadmin");
-      if (!membership.rowCount && !operator) return reply.code(403).send({ message: "Author scope is not available to this user" });
+      if (!membership.rowCount && !operator)
+        return reply.code(403).send({ message: "Author scope is not available to this user" });
       authorScope = {
         authorId,
         permissions: (membership.rows[0]?.permissions_json as string[] | undefined) ?? [],

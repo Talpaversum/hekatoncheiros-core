@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import { hasAllPrivileges } from "../../access/privileges.js";
+import { computeAppAvailability } from "../../apps/app-availability.js";
 import { getAppInstallationStore } from "../../apps/app-installation-service.js";
 import { getAppRuntimeHealth } from "../../apps/app-runtime-health.js";
 import { hasSelectedActiveLicense } from "../../licensing/license-service.js";
@@ -68,6 +69,14 @@ export async function registerAppRegistryRoutes(app: FastifyInstance) {
       .filter((app) => !requiresLicense(app) || entitledAppIds.has(app.app_id))
       .filter((app) => hasAllPrivileges(request.requestContext.privileges, app.required_privileges))
       .map((app) => {
+        const runtime = getAppRuntimeHealth(app.app_id);
+        const uiStatus = app.ui_url && app.ui_integrity ? ("ready" as const) : ("missing" as const);
+        const availability = computeAppAvailability({
+          installationStatus: "installed",
+          runtimeHealth: runtime.status,
+          licenseStatus: requiresLicense(app) ? "active" : "not_required",
+          uiStatus,
+        });
         const navEntries = app.nav_entries ?? app.manifest.integration?.ui?.nav_entries ?? [];
         const filtered = navEntries.filter((entry) =>
           hasAllPrivileges(request.requestContext.privileges, entry.required_privileges ?? []),
@@ -88,7 +97,9 @@ export async function registerAppRegistryRoutes(app: FastifyInstance) {
           },
           nav_entries: filtered,
           help_entries: helpEntries,
-          runtime: getAppRuntimeHealth(app.app_id),
+          runtime,
+          ui_status: uiStatus,
+          ...availability,
         };
       });
 

@@ -1,8 +1,10 @@
+import { STATUS_CODES } from "node:http";
+
 import cors from "@fastify/cors";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import fastify from "fastify";
-import { STATUS_CODES } from "node:http";
+import { ZodError } from "zod";
 
 import { registerCatalogAutoRefresh } from "./apps/app-catalog-auto-refresh.js";
 import { registerAppRuntimeHealthMonitor } from "./apps/app-runtime-health.js";
@@ -44,10 +46,52 @@ export async function buildApp() {
   });
 
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof ZodError) {
+      const fieldErrors = Object.fromEntries(
+        error.issues.map((issue) => [issue.path.join("."), issue.message]),
+      );
+      return reply
+        .status(400)
+        .send({
+          statusCode: 400,
+          error: "Bad Request",
+          message: "Validation failed",
+          field_errors: fieldErrors,
+        });
+    }
+    if (
+      typeof error === "object" &&
+      error &&
+      "code" in error &&
+      (error as { code?: string }).code === "23505"
+    ) {
+      const detail = String((error as { detail?: unknown }).detail ?? "");
+      const field = detail.includes("email")
+        ? "email"
+        : detail.includes("domain")
+          ? "primary_domain"
+          : "form";
+      return reply
+        .status(409)
+        .send({
+          statusCode: 409,
+          error: "Conflict",
+          message: "A record with this value already exists",
+          field_errors: { [field]: "This value is already in use" },
+        });
+    }
     if (typeof error === "object" && error && "statusCode" in error) {
       const typed = error as { statusCode: number; message: string };
-      const details = "details" in typed ? (typed as { details?: Record<string, unknown> }).details : undefined;
-      return reply.status(typed.statusCode).send({ statusCode: typed.statusCode, error: STATUS_CODES[typed.statusCode] ?? "Error", message: typed.message, ...(details ?? {}) });
+      const details =
+        "details" in typed ? (typed as { details?: Record<string, unknown> }).details : undefined;
+      return reply
+        .status(typed.statusCode)
+        .send({
+          statusCode: typed.statusCode,
+          error: STATUS_CODES[typed.statusCode] ?? "Error",
+          message: typed.message,
+          ...(details ?? {}),
+        });
     }
     app.log.error(error);
     return reply.status(500).send({ message: "Internal Server Error" });

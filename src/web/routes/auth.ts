@@ -38,12 +38,12 @@ async function issueAccessToken({
   config,
 }: {
   userId: string;
-  tenantId: string;
+  tenantId?: string;
   config: FastifyInstance["config"];
 }) {
   const secret = new TextEncoder().encode(config.JWT_SECRET);
   const expiresAt = buildExpiry(ACCESS_TOKEN_TTL_SECONDS);
-  const jwt = await new SignJWT({ tenant_id: tenantId })
+  const jwt = await new SignJWT(tenantId ? { tenant_id: tenantId } : {})
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(userId)
     .setIssuer(config.JWT_ISSUER)
@@ -54,11 +54,7 @@ async function issueAccessToken({
   return { jwt, expiresAt };
 }
 
-async function issueRefreshToken({
-  userId,
-}: {
-  userId: string;
-}) {
+async function issueRefreshToken({ userId }: { userId: string }) {
   const token = randomBytes(48).toString("hex");
   const tokenHash = hashRefreshToken(token);
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
@@ -74,10 +70,9 @@ async function issueRefreshToken({
 
 async function revokeRefreshToken(tokenHash: string) {
   const pool = getPool();
-  await pool.query(
-    "update core.refresh_tokens set revoked_at = now() where token_hash = $1",
-    [tokenHash],
-  );
+  await pool.query("update core.refresh_tokens set revoked_at = now() where token_hash = $1", [
+    tokenHash,
+  ]);
 }
 
 async function findUserByEmail(email: string) {
@@ -102,16 +97,35 @@ async function findValidRefreshToken(tokenHash: string) {
     | undefined;
 }
 
+async function findDefaultTenantForUser(userId: string) {
+  const result = await getPool().query(
+    `select tenant_id from core.tenant_memberships
+      where user_id=$1 and status='active'
+      order by created_at limit 1`,
+    [userId],
+  );
+  return result.rowCount ? String(result.rows[0]["tenant_id"]) : undefined;
+}
+
 export async function registerAuthRoutes(app: FastifyInstance) {
   app.post<{ Body: LoginRequest }>("/auth/login", async (request, reply) => {
     const { email, password } = request.body;
     const user = await findUserByEmail(email);
     if (!user || user.status !== "active") {
       await recordAudit({
-        tenantId: app.config.DEFAULT_TENANT_ID, actorType: "anonymous", sourceService: "core",
-        eventType: "auth.login.failed", category: "authentication", action: "auth.login",
-        outcome: "failure", severity: "warning", scope: "tenant", visibility: "tenant_admin",
-        message: "Login failed", metadata: { email }, ...getAuditRequestMetadata(request),
+        tenantId: app.config.DEFAULT_TENANT_ID,
+        actorType: "anonymous",
+        sourceService: "core",
+        eventType: "auth.login.failed",
+        category: "authentication",
+        action: "auth.login",
+        outcome: "failure",
+        severity: "warning",
+        scope: "tenant",
+        visibility: "tenant_admin",
+        message: "Login failed",
+        metadata: { email },
+        ...getAuditRequestMetadata(request),
       });
       throw new UnauthorizedError("Invalid credentials");
     }
@@ -119,24 +133,49 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     const hashed = hashPassword(password);
     if (hashed !== user.password_hash) {
       await recordAudit({
-        tenantId: app.config.DEFAULT_TENANT_ID, actorType: "anonymous", sourceService: "core",
-        eventType: "auth.login.failed", category: "authentication", action: "auth.login",
-        outcome: "failure", severity: "warning", scope: "tenant", visibility: "tenant_admin",
-        resourceType: "user", resourceId: user.id, message: "Login failed",
-        metadata: { email }, ...getAuditRequestMetadata(request),
+        tenantId: app.config.DEFAULT_TENANT_ID,
+        actorType: "anonymous",
+        sourceService: "core",
+        eventType: "auth.login.failed",
+        category: "authentication",
+        action: "auth.login",
+        outcome: "failure",
+        severity: "warning",
+        scope: "tenant",
+        visibility: "tenant_admin",
+        resourceType: "user",
+        resourceId: user.id,
+        message: "Login failed",
+        metadata: { email },
+        ...getAuditRequestMetadata(request),
       });
       throw new UnauthorizedError("Invalid credentials");
     }
 
-    const tenantId = app.config.DEFAULT_TENANT_ID;
-    const { jwt, expiresAt } = await issueAccessToken({ userId: user.id, tenantId, config: app.config });
+    const tenantId = await findDefaultTenantForUser(user.id);
+    const { jwt, expiresAt } = await issueAccessToken({
+      userId: user.id,
+      tenantId,
+      config: app.config,
+    });
     const { token, expiresAt: refreshExpiresAt } = await issueRefreshToken({ userId: user.id });
 
     await recordAudit({
-      tenantId, actorUserId: user.id, effectiveUserId: user.id, actorType: "user", sourceService: "core",
-      eventType: "auth.login.succeeded", category: "authentication", action: "auth.login",
-      outcome: "success", severity: "info", scope: "user", visibility: "user",
-      resourceType: "user", resourceId: user.id, message: "Login succeeded",
+      tenantId: tenantId ?? app.config.DEFAULT_TENANT_ID,
+      actorUserId: user.id,
+      effectiveUserId: user.id,
+      actorType: "user",
+      sourceService: "core",
+      eventType: "auth.login.succeeded",
+      category: "authentication",
+      action: "auth.login",
+      outcome: "success",
+      severity: "info",
+      scope: "user",
+      visibility: "user",
+      resourceType: "user",
+      resourceId: user.id,
+      message: "Login succeeded",
       ...getAuditRequestMetadata(request),
     });
 
@@ -161,8 +200,12 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       throw new UnauthorizedError("Refresh token expired");
     }
 
-    const tenantId = app.config.DEFAULT_TENANT_ID;
-    const { jwt, expiresAt } = await issueAccessToken({ userId: stored.user_id, tenantId, config: app.config });
+    const tenantId = await findDefaultTenantForUser(stored.user_id);
+    const { jwt, expiresAt } = await issueAccessToken({
+      userId: stored.user_id,
+      tenantId,
+      config: app.config,
+    });
 
     return reply.send({
       access_token: jwt,

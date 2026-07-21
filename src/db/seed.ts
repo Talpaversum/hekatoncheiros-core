@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { provisionSystemTenantRoles } from "../identity/tenant-rbac.js";
+
 import { getPool } from "./pool.js";
 
 function hashPassword(password: string) {
@@ -17,6 +19,28 @@ async function run() {
     "insert into core.users (id, email, password_hash, status) values ($1, $2, $3, $4) on conflict (id) do update set email = excluded.email, password_hash = excluded.password_hash, status = excluded.status",
     ["usr_admin", "admin@example.com", hashPassword("admin"), "active"],
   );
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await provisionSystemTenantRoles(client, defaultTenantId);
+    const membership = await client.query(
+      `insert into core.tenant_memberships(tenant_id,user_id,status) values($1,'usr_admin','active')
+       on conflict(tenant_id,user_id) do update set status='active',updated_at=now() returning id`,
+      [defaultTenantId],
+    );
+    await client.query(
+      `insert into core.tenant_member_roles(tenant_membership_id,role_id)
+       select $1,id from core.tenant_roles where tenant_id=$2 and key in ('tenant_member','tenant_admin')
+       on conflict do nothing`,
+      [membership.rows[0]["id"], defaultTenantId],
+    );
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
   await pool.query(
     "insert into core.user_privileges (user_id, tenant_id, privilege) values ($1, $2, $3) on conflict do nothing",
     ["usr_admin", null, "core.apps.register"],

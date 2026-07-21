@@ -44,6 +44,7 @@ const projectSchema = z
     source_type: z.enum(["manifest", "private_feed"]),
     manifest_url: z.string().url().nullable().optional(),
     feed_url: z.string().url().nullable().optional(),
+    owner_type: z.enum(["user", "tenant"]).optional(),
   })
   .superRefine((value, context) => {
     if (value.source_type === "manifest" && !value.manifest_url)
@@ -70,7 +71,9 @@ const valueHash = (value: unknown) =>
 function mapProject(row: ProjectRow) {
   return {
     project_id: String(row["project_id"]),
-    tenant_id: String(row["tenant_id"]),
+    tenant_id: row["tenant_id"] === null ? null : String(row["tenant_id"]),
+    owner_type: String(row["owner_type"]),
+    owner_id: String(row["owner_id"]),
     created_by: String(row["created_by"]),
     display_name: String(row["display_name"]),
     origin_url: (row["origin_url"] as string | null) ?? null,
@@ -111,19 +114,51 @@ function mapProject(row: ProjectRow) {
   };
 }
 
+const requiredProjectPrivilege = new WeakMap<FastifyRequest, string>();
+
 async function prepare(request: FastifyRequest, app: FastifyInstance, privilege: string) {
   await requireUserAuth(request, app.config);
   requireInstanceCapability(app.config, "privateAppDevelopment");
-  if (!hasPrivilege(request.requestContext.privileges, privilege)) throw new ForbiddenError();
+  requiredProjectPrivilege.set(request, privilege);
 }
 
 async function findProject(request: FastifyRequest, projectId: string) {
   const result = await getPool().query(
-    "select * from core.local_app_projects where project_id=$1 and tenant_id=$2",
-    [projectId, request.requestContext.tenant.tenantId],
+    `select * from core.local_app_projects where project_id=$1 and (
+      (owner_type='user' and owner_id=$2) or (owner_type='tenant' and tenant_id=$3)
+    )`,
+    [projectId, request.requestContext.actor.userId, request.requestContext.tenant.tenantId],
   );
   if (!result.rowCount) throw new NotFoundError("Developer project not found");
-  return result.rows[0] as ProjectRow;
+  const row = result.rows[0] as ProjectRow;
+  const required = requiredProjectPrivilege.get(request);
+  if (
+    row["owner_type"] === "tenant" &&
+    required &&
+    !hasPrivilege(request.requestContext.privileges, required)
+  )
+    throw new ForbiddenError();
+  return row;
+}
+
+async function resolveProjectOwner(request: FastifyRequest, requested?: "user" | "tenant") {
+  const membership = await getPool().query(
+    "select 1 from core.tenant_memberships where tenant_id=$1 and user_id=$2 and status='active'",
+    [request.requestContext.tenant.tenantId, request.requestContext.actor.userId],
+  );
+  const required = requiredProjectPrivilege.get(request);
+  const hasTenantAccess =
+    Boolean(membership.rowCount) ||
+    Boolean(required && hasPrivilege(request.requestContext.privileges, required));
+  const ownerType = requested ?? (hasTenantAccess ? "tenant" : "user");
+  if (ownerType === "tenant" && !hasTenantAccess) throw new ForbiddenError();
+  return ownerType === "tenant"
+    ? {
+        ownerType,
+        ownerId: request.requestContext.tenant.tenantId,
+        tenantId: request.requestContext.tenant.tenantId,
+      }
+    : { ownerType, ownerId: request.requestContext.actor.userId, tenantId: null };
 }
 
 const trusted = async (origin: string) =>
@@ -155,14 +190,18 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
           "private_feed",
         ]),
         display_name: z.string().trim().min(2).max(120).optional(),
+        owner_type: z.enum(["user", "tenant"]).optional(),
       })
       .parse(request.body);
     const projectId = `local_${randomUUID().replaceAll("-", "")}`;
+    const owner = await resolveProjectOwner(request, body.owner_type);
     const result = await getPool().query(
-      `insert into core.local_app_projects(project_id,tenant_id,created_by,display_name,source_type,wizard_step,wizard_state_json) values($1,$2,$3,$4,$5,2,$6::jsonb) returning *`,
+      `insert into core.local_app_projects(project_id,tenant_id,owner_type,owner_id,created_by,display_name,source_type,wizard_step,wizard_state_json) values($1,$2,$3,$4,$5,$6,$7,2,$8::jsonb) returning *`,
       [
         projectId,
-        request.requestContext.tenant.tenantId,
+        owner.tenantId,
+        owner.ownerType,
+        owner.ownerId,
         request.requestContext.actor.userId,
         body.display_name ?? "Untitled project",
         body.source_type,
@@ -202,10 +241,9 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
       );
     }
     const result = await getPool().query(
-      `update core.local_app_projects set wizard_step=$3,display_name=coalesce($4,display_name),origin_url=coalesce($5,origin_url),source_connection_id=coalesce($6,source_connection_id),repository=coalesce($7,repository),workspace_path=coalesce($8,workspace_path),branch=coalesce($9,branch),manifest_path=coalesce($10,manifest_path),manifest_url=coalesce($11,manifest_url),feed_url=coalesce($12,feed_url),runtime_type=coalesce($13,runtime_type),wizard_state_json=coalesce($14::jsonb,wizard_state_json),updated_at=now() where project_id=$1 and tenant_id=$2 returning *`,
+      `update core.local_app_projects set wizard_step=$2,display_name=coalesce($3,display_name),origin_url=coalesce($4,origin_url),source_connection_id=coalesce($5,source_connection_id),repository=coalesce($6,repository),workspace_path=coalesce($7,workspace_path),branch=coalesce($8,branch),manifest_path=coalesce($9,manifest_path),manifest_url=coalesce($10,manifest_url),feed_url=coalesce($11,feed_url),runtime_type=coalesce($12,runtime_type),wizard_state_json=coalesce($13::jsonb,wizard_state_json),updated_at=now() where project_id=$1 returning *`,
       [
         projectId,
-        request.requestContext.tenant.tenantId,
         body.wizard_step,
         body.display_name,
         body.origin_url,
@@ -227,12 +265,15 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
     const body = projectSchema.parse(request.body);
     const projectId = `local_${randomUUID().replaceAll("-", "")}`;
     const origin = normalizeTrustedOrigin(body.origin_url);
+    const owner = await resolveProjectOwner(request, body.owner_type);
     const result = await getPool().query(
-      `insert into core.local_app_projects(project_id,tenant_id,created_by,display_name,origin_url,source_type,manifest_url,feed_url)
-       values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
+      `insert into core.local_app_projects(project_id,tenant_id,owner_type,owner_id,created_by,display_name,origin_url,source_type,manifest_url,feed_url)
+       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *`,
       [
         projectId,
-        request.requestContext.tenant.tenantId,
+        owner.tenantId,
+        owner.ownerType,
+        owner.ownerId,
         request.requestContext.actor.userId,
         body.display_name,
         origin,
@@ -247,8 +288,15 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
   app.get("/developer-projects", async (request, reply) => {
     await prepare(request, app, "developer.projects.read");
     const result = await getPool().query(
-      "select * from core.local_app_projects where tenant_id=$1 order by updated_at desc",
-      [request.requestContext.tenant.tenantId],
+      `select * from core.local_app_projects where
+        (owner_type='user' and owner_id=$1) or
+        (owner_type='tenant' and tenant_id=$2 and $3::boolean)
+       order by updated_at desc`,
+      [
+        request.requestContext.actor.userId,
+        request.requestContext.tenant.tenantId,
+        hasPrivilege(request.requestContext.privileges, "developer.projects.read"),
+      ],
     );
     return reply.send({ items: result.rows.map(mapProject) });
   });
@@ -262,9 +310,11 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
 
   app.delete("/developer-projects/:id", async (request, reply) => {
     await prepare(request, app, "developer.projects.manage");
+    const projectId = (request.params as { id: string }).id;
+    await findProject(request, projectId);
     const result = await getPool().query(
-      "delete from core.local_app_projects where project_id=$1 and tenant_id=$2 returning project_id",
-      [(request.params as { id: string }).id, request.requestContext.tenant.tenantId],
+      "delete from core.local_app_projects where project_id=$1 returning project_id",
+      [projectId],
     );
     if (!result.rowCount) throw new NotFoundError("Developer project not found");
     return reply.code(204).send();
@@ -276,11 +326,10 @@ export async function registerDeveloperProjectRoutes(app: FastifyInstance) {
     await findProject(request, projectId);
     const body = projectSchema.parse(request.body);
     const result = await getPool().query(
-      `update core.local_app_projects set display_name=$3,origin_url=$4,source_type=$5,manifest_url=$6,feed_url=$7,status='draft',connectivity_result_json=null,manifest_result_json=null,trusted_origin_id=null,installed_app_id=null,updated_at=now()
-       where project_id=$1 and tenant_id=$2 returning *`,
+      `update core.local_app_projects set display_name=$2,origin_url=$3,source_type=$4,manifest_url=$5,feed_url=$6,status='draft',connectivity_result_json=null,manifest_result_json=null,trusted_origin_id=null,installed_app_id=null,updated_at=now()
+       where project_id=$1 returning *`,
       [
         projectId,
-        request.requestContext.tenant.tenantId,
         body.display_name,
         normalizeTrustedOrigin(body.origin_url),
         body.source_type,

@@ -28,6 +28,30 @@ export const PRIVILEGE_CATALOG: PrivilegeDefinition[] = [
     scope: "platform",
   },
   {
+    id: "platform.users.read",
+    label: "Read platform users",
+    description: "Read user accounts and their platform access configuration.",
+    scope: "platform",
+  },
+  {
+    id: "platform.users.manage",
+    label: "Manage platform users",
+    description: "Create and update user accounts and platform privileges.",
+    scope: "platform",
+  },
+  {
+    id: "platform.tenants.read",
+    label: "Read platform tenants",
+    description: "Read tenant records across the platform.",
+    scope: "platform",
+  },
+  {
+    id: "platform.tenants.manage",
+    label: "Manage platform tenants",
+    description: "Create and update tenant records across the platform.",
+    scope: "platform",
+  },
+  {
     id: "developer.projects.read",
     label: "Read developer projects",
     description: "Read tenant-scoped local development projects.",
@@ -181,6 +205,42 @@ export const PRIVILEGE_CATALOG: PrivilegeDefinition[] = [
     id: "tenant.config.manage",
     label: "Manage tenant configuration",
     description: "Update tenant details and manage tenant-local configuration.",
+    scope: "tenant",
+  },
+  {
+    id: "tenant.members.read",
+    label: "Read tenant members",
+    description: "Read memberships, assigned roles, and effective tenant privileges.",
+    scope: "tenant",
+  },
+  {
+    id: "tenant.members.manage",
+    label: "Manage tenant members",
+    description: "Create, deactivate, and remove memberships in the current tenant.",
+    scope: "tenant",
+  },
+  {
+    id: "tenant.roles.read",
+    label: "Read tenant roles",
+    description: "Read system and custom roles in the current tenant.",
+    scope: "tenant",
+  },
+  {
+    id: "tenant.roles.manage",
+    label: "Manage tenant roles",
+    description: "Create and update custom roles in the current tenant.",
+    scope: "tenant",
+  },
+  {
+    id: "tenant.privileges.read",
+    label: "Read tenant privileges",
+    description: "Read tenant privilege definitions and role composition.",
+    scope: "tenant",
+  },
+  {
+    id: "tenant.privileges.manage",
+    label: "Manage tenant role privileges",
+    description: "Add and remove privileges from custom tenant roles.",
     scope: "tenant",
   },
   {

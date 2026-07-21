@@ -50,6 +50,8 @@ const prepare = async (request: FastifyRequest, app: FastifyInstance) => {
 const publicRow = (row: Record<string, unknown>) => ({
   connection_id: row["connection_id"],
   tenant_id: row["tenant_id"],
+  owner_type: row["owner_type"],
+  owner_id: row["owner_id"],
   provider: row["provider"],
   auth_method: row["auth_method"],
   owner_label: row["owner_label"],
@@ -106,8 +108,15 @@ export async function registerDeveloperConnectionRoutes(app: FastifyInstance) {
     await prepare(request, app);
     requireConnectionUse(request);
     const rows = await getPool().query(
-      "select * from core.developer_connections where tenant_id=$1 and (visibility='tenant' or owner_user_id=$2) order by updated_at desc",
-      [request.requestContext.tenant.tenantId, request.requestContext.actor.userId],
+      `select * from core.developer_connections where
+        (owner_type='user' and owner_id=$2) or
+        (owner_type='tenant' and tenant_id=$1 and $3::boolean and (visibility='tenant' or owner_user_id=$2))
+       order by updated_at desc`,
+      [
+        request.requestContext.tenant.tenantId,
+        request.requestContext.actor.userId,
+        hasPrivilege(request.requestContext.privileges, "developer.connections.use"),
+      ],
     );
     return reply.send({
       items: rows.rows.map(publicRow),
@@ -121,11 +130,19 @@ export async function registerDeveloperConnectionRoutes(app: FastifyInstance) {
       .enum(["personal", "tenant"])
       .default("personal")
       .parse((request.body as Record<string, unknown>)["visibility"]);
+    const membership = await getPool().query(
+      "select 1 from core.tenant_memberships where tenant_id=$1 and user_id=$2 and status='active'",
+      [request.requestContext.tenant.tenantId, request.requestContext.actor.userId],
+    );
     const requiredPrivilege =
       visibility === "tenant"
         ? "developer.connections.shared.manage"
         : "developer.connections.personal.manage";
-    if (!hasPrivilege(request.requestContext.privileges, requiredPrivilege)) {
+    const personalOwner =
+      visibility === "personal" &&
+      !membership.rowCount &&
+      !hasPrivilege(request.requestContext.privileges, requiredPrivilege);
+    if (!personalOwner && !hasPrivilege(request.requestContext.privileges, requiredPrivilege)) {
       throw new ForbiddenError();
     }
     const id = `dcn_${randomUUID().replaceAll("-", "")}`;
@@ -144,10 +161,14 @@ export async function registerDeveloperConnectionRoutes(app: FastifyInstance) {
     let secret: { ciphertext: string; iv: string; tag: string } | null = null;
     if (body.credential) secret = encryptDeveloperSecret(body.credential, app.config);
     const result = await getPool().query(
-      `insert into core.developer_connections(connection_id,tenant_id,created_by,owner_user_id,visibility,provider,auth_method,owner_label,status,scopes_json,metadata_json,credential_ciphertext,credential_iv,credential_tag,last_verified_at) values($1,$2,$3,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,case when $8='verified' then now() else null end) returning *`,
+      `insert into core.developer_connections(connection_id,tenant_id,owner_type,owner_id,created_by,owner_user_id,visibility,provider,auth_method,owner_label,status,scopes_json,metadata_json,credential_ciphertext,credential_iv,credential_tag,last_verified_at) values($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13,$14,$15,case when $10='verified' then now() else null end) returning *`,
       [
         id,
-        request.requestContext.tenant.tenantId,
+        personalOwner ? null : request.requestContext.tenant.tenantId,
+        personalOwner ? "user" : "tenant",
+        personalOwner
+          ? request.requestContext.actor.userId
+          : request.requestContext.tenant.tenantId,
         request.requestContext.actor.userId,
         visibility,
         body.provider,
@@ -168,7 +189,8 @@ export async function registerDeveloperConnectionRoutes(app: FastifyInstance) {
     await prepare(request, app);
     const id = (request.params as { id: string }).id;
     const found = await getPool().query(
-      "select * from core.developer_connections where connection_id=$1 and tenant_id=$2 and (visibility='tenant' or owner_user_id=$3)",
+      `select * from core.developer_connections where connection_id=$1 and
+       ((owner_type='user' and owner_id=$3) or (owner_type='tenant' and tenant_id=$2))`,
       [id, request.requestContext.tenant.tenantId, request.requestContext.actor.userId],
     );
     if (!found.rowCount) throw new NotFoundError("Developer connection not found");
@@ -209,8 +231,8 @@ export async function registerDeveloperConnectionRoutes(app: FastifyInstance) {
       await getGitHubInstallationToken(String(metadata["installation_id"]), app.config);
     }
     const updated = await getPool().query(
-      "update core.developer_connections set status='verified',metadata_json=$3::jsonb,last_verified_at=now(),updated_at=now() where connection_id=$1 and tenant_id=$2 returning *",
-      [id, request.requestContext.tenant.tenantId, JSON.stringify(metadata)],
+      "update core.developer_connections set status='verified',metadata_json=$2::jsonb,last_verified_at=now(),updated_at=now() where connection_id=$1 returning *",
+      [id, JSON.stringify(metadata)],
     );
     await audit(request, "developer.connection.verified", id);
     return reply.send(publicRow(updated.rows[0]));
@@ -219,7 +241,8 @@ export async function registerDeveloperConnectionRoutes(app: FastifyInstance) {
     await prepare(request, app);
     const id = (request.params as { id: string }).id;
     const found = await getPool().query(
-      "select * from core.developer_connections where connection_id=$1 and tenant_id=$2 and (visibility='tenant' or owner_user_id=$3)",
+      `select * from core.developer_connections where connection_id=$1 and
+       ((owner_type='user' and owner_id=$3) or (owner_type='tenant' and tenant_id=$2))`,
       [id, request.requestContext.tenant.tenantId, request.requestContext.actor.userId],
     );
     if (!found.rowCount) throw new NotFoundError("Developer connection not found");
@@ -230,8 +253,8 @@ export async function registerDeveloperConnectionRoutes(app: FastifyInstance) {
       if (installationId) forgetGitHubInstallationToken(String(installationId));
     }
     await getPool().query(
-      "update core.developer_connections set status='revoked',credential_ciphertext=null,credential_iv=null,credential_tag=null,updated_at=now() where connection_id=$1 and tenant_id=$2",
-      [id, request.requestContext.tenant.tenantId],
+      "update core.developer_connections set status='revoked',credential_ciphertext=null,credential_iv=null,credential_tag=null,updated_at=now() where connection_id=$1",
+      [id],
     );
     await audit(request, "developer.connection.revoked", id);
     return reply.code(204).send();
